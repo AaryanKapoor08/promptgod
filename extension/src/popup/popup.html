@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PromptGod</title>
+  <link rel="stylesheet" href="./popup.css">
+</head>
+<body>
+  <div class="header">
+    <img class="header-icon" id="header-logo" alt="" />
+    <h1>PromptGod</h1>
+  </div>
+  <p class="subtitle">Make your AI prompts smarter with one click.</p>
+
+  <p class="byok-hint">Bring your own API key to get started. Get one from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">OpenRouter</a> or use any other key you have (Anthropic, OpenAI, etc.).</p>
+
+  <!-- API Key Settings -->
+  <div id="byok-section" class="section">
+    <label for="api-key">API Key</label>
+    <input type="password" id="api-key" placeholder="sk-or-... / sk-ant-... / sk-..." autocomplete="off" spellcheck="false">
+    <div id="key-status" class="status"></div>
+
+    <div class="model-label-row">
+      <label for="model-select" class="label--model">Model</label>
+      <span id="model-hint" class="model-hint"></span>
+    </div>
+    <select id="model-select" class="model-select">
+      <option value="">Enter an API key first</option>
+    </select>
+    <span id="cost-hint" class="cost-hint"></span>
+
+    <div id="custom-model-section" class="custom-model-section" style="display:none;">
+      <label for="custom-model">Custom model ID (optional)</label>
+      <input type="text" id="custom-model" placeholder="org/model-name" autocomplete="off" spellcheck="false">
+      <div id="custom-model-status" class="status"></div>
+    </div>
+  </div>
+
+  <!-- Context Toggle -->
+  <div class="section toggle-section">
+    <label class="toggle-label">
+      <input type="checkbox" id="context-toggle" checked>
+      <span>Include conversation context</span>
+    </label>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <p class="supported-sites">Works on ChatGPT, Claude, Gemini, Perplexity</p>
+
+  <div class="footer">
+    <span class="footer-link">v2.0.0</span>
+    <span class="footer-sep">&middot;</span>
+    <span id="enhancement-count" class="footer-link"></span>
+  </div>
+
+  <script type="module" src="./popup.ts"></script>
+</body>
+</html>
