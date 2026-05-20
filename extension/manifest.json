@@ -3,7 +3,7 @@
   "name": "PromptGod",
   "version": "2.0.0",
   "description": "Make your AI prompts smarter with one click",
-  "permissions": ["storage", "contextMenus", "scripting", "activeTab"],
+  "permissions": ["storage", "contextMenus", "scripting", "activeTab", "alarms"],
   "host_permissions": [
     "https://chat.openai.com/*",
     "https://chatgpt.com/*",
@@ -11,8 +11,6 @@
     "https://gemini.google.com/*",
     "https://www.perplexity.ai/*",
     "https://perplexity.ai/*",
-    "https://api.anthropic.com/*",
-    "https://api.openai.com/*",
     "https://generativelanguage.googleapis.com/*",
     "https://openrouter.ai/*"
   ],

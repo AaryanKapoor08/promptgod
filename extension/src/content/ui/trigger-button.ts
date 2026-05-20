@@ -12,6 +12,22 @@ let isEnhancing = false
 let injectedButton: HTMLButtonElement | null = null
 const ENHANCEMENT_PROGRESS_TIMEOUT_MS = 90000
 
+type ContentSettings = {
+  includeConversationContext: boolean
+  model?: string
+}
+
+type ContentSettingsResponse = {
+  type?: 'CONTENT_SETTINGS'
+  includeConversationContext?: boolean
+  model?: unknown
+}
+
+type TooltipStateResponse = {
+  type?: 'TOOLTIP_STATE'
+  hasSeenTooltip?: boolean
+}
+
 // Track original prompt across re-enhance clicks
 let storedOriginal: string | null = null
 let lastEnhancedText: string | null = null
@@ -39,6 +55,47 @@ function hasRuntimeContext(): boolean {
 
 function shouldSkipNormalCleanup(model: unknown): boolean {
   return typeof model === 'string' && /\bgemma\b/i.test(model)
+}
+
+async function loadContentSettings(): Promise<ContentSettings> {
+  if (!hasRuntimeContext() || !chrome.runtime.sendMessage) {
+    return { includeConversationContext: false }
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_CONTENT_SETTINGS' }) as ContentSettingsResponse | undefined
+    return {
+      includeConversationContext: response?.includeConversationContext === true,
+      model: typeof response?.model === 'string' ? response.model : undefined,
+    }
+  } catch {
+    return { includeConversationContext: false }
+  }
+}
+
+async function getHasSeenTooltip(): Promise<boolean> {
+  if (!hasRuntimeContext() || !chrome.runtime.sendMessage) {
+    return true
+  }
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'GET_TOOLTIP_STATE' }) as TooltipStateResponse | undefined
+    return response?.hasSeenTooltip !== false
+  } catch {
+    return true
+  }
+}
+
+async function markTooltipSeen(): Promise<void> {
+  if (!hasRuntimeContext() || !chrome.runtime.sendMessage) {
+    return
+  }
+
+  try {
+    await chrome.runtime.sendMessage({ type: 'SET_TOOLTIP_SEEN' })
+  } catch {
+    // best-effort persistence only
+  }
 }
 
 export function shouldUseProgressiveComposerRender(platform: string, model: unknown): boolean {
@@ -308,11 +365,10 @@ async function handleEnhanceClick(adapter: PlatformAdapter): Promise<void> {
   let recentContext: string | undefined
   let selectedModel: string | undefined
   try {
-    const settings = await chrome.storage.local.get(['includeConversationContext', 'model'])
-    const includeContext = settings.includeConversationContext !== false // default: on
-    selectedModel = typeof settings.model === 'string' ? settings.model : undefined
+    const settings = await loadContentSettings()
+    selectedModel = settings.model
     shouldProgressivelyRender = shouldUseProgressiveComposerRender(platform, selectedModel)
-    if (includeContext && !context.isNewConversation) {
+    if (settings.includeConversationContext && !context.isNewConversation) {
       const scraped = adapter.getRecentMessages(500)
       if (scraped) recentContext = scraped
     }
@@ -638,15 +694,6 @@ async function handleEnhanceClick(adapter: PlatformAdapter): Promise<void> {
     } else if (msg.type === 'ERROR') {
       console.error({ message: msg.message, code: msg.code }, '[PromptGod] Enhancement error')
       showToast({ message: msg.message, variant: 'error' })
-      // Flush any pending text so partial result is visible
-      if (accumulatedText.length > 0 && renderedIndex < accumulatedText.length) {
-        try {
-          adapter.setPromptText(accumulatedText)
-        } catch { /* best-effort */ }
-      }
-      if (accumulatedText.length > 0) {
-        ensureUndoButton()
-      }
       settle()
     } else if (msg.type === 'SETTLEMENT') {
       if (progressTimeout !== null) {
@@ -716,15 +763,6 @@ async function handleEnhanceClick(adapter: PlatformAdapter): Promise<void> {
         variant: 'warning',
       })
     }
-    // Flush any pending text so partial result is visible
-    if (accumulatedText.length > 0 && renderedIndex < accumulatedText.length) {
-      try {
-        adapter.setPromptText(accumulatedText)
-      } catch { /* best-effort */ }
-    }
-    if (accumulatedText.length > 0) {
-      ensureUndoButton()
-    }
     settle()
   })
 }
@@ -762,9 +800,9 @@ async function handlePreviewEnhance(adapter: PlatformAdapter): Promise<void> {
   let recentContext: string | undefined
   let selectedModel: string | undefined
   try {
-    const settings = await chrome.storage.local.get(['includeConversationContext', 'model'])
-    selectedModel = typeof settings.model === 'string' ? settings.model : undefined
-    if (settings.includeConversationContext !== false && !context.isNewConversation) {
+    const settings = await loadContentSettings()
+    selectedModel = settings.model
+    if (settings.includeConversationContext && !context.isNewConversation) {
       const scraped = adapter.getRecentMessages(500)
       if (scraped) recentContext = scraped
     }
@@ -964,8 +1002,8 @@ function removeEnhancingStatus(): void {
 }
 
 export function showFirstRunTooltip(): void {
-  chrome.storage.local.get(['hasSeenTooltip'], (result) => {
-    if (result.hasSeenTooltip) return
+  void (async () => {
+    if (await getHasSeenTooltip()) return
     if (!injectedButton) return
 
     const tooltip = document.createElement('div')
@@ -979,15 +1017,18 @@ export function showFirstRunTooltip(): void {
       tooltip.classList.add('promptgod-tooltip--visible')
     })
 
+    let dismissed = false
     const dismiss = () => {
+      if (dismissed) return
+      dismissed = true
       tooltip.classList.remove('promptgod-tooltip--visible')
       setTimeout(() => tooltip.remove(), 200)
-      chrome.storage.local.set({ hasSeenTooltip: true })
+      void markTooltipSeen()
     }
 
     injectedButton!.addEventListener('click', dismiss, { once: true })
     setTimeout(dismiss, 5000)
-  })
+  })()
 }
 
 // Re-inject button when platform re-renders the composer (SPA navigation)

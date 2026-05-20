@@ -1,5 +1,10 @@
 export const GOOGLE_PRIMARY_MODEL = 'gemini-2.5-flash'
 export const GOOGLE_FLASH_LITE_MODEL = 'gemini-2.5-flash-lite'
+export const GOOGLE_GEMMA_FALLBACK_MODEL = 'gemma-4-26b-a4b-it'
+
+export const GOOGLE_GEMMA_MODELS = [
+  GOOGLE_GEMMA_FALLBACK_MODEL,
+] as const
 
 export const GOOGLE_NON_GEMMA_MODELS = [
   GOOGLE_PRIMARY_MODEL,

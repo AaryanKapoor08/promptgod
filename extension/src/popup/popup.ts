@@ -1,6 +1,7 @@
 import { analyzeApiKey, detectProviderFromApiKey, type Provider } from '../lib/provider-policy'
 import { PreferenceManager } from '../lib/preferences'
 import { listGoogleModels } from '../lib/llm-client'
+import { GOOGLE_GEMMA_FALLBACK_MODEL } from '../lib/rewrite-google/models'
 import { OPENROUTER_ACCOUNT_STATUS_KEY, type OpenRouterAccountStatus } from '../lib/rewrite-openrouter/account-status'
 import { getOpenRouterCatalogWithPinnedFallback } from '../lib/rewrite-openrouter/catalog'
 import {
@@ -43,7 +44,7 @@ const savedApiKeysByProvider: Partial<Record<Provider, string>> = {}
 const draftApiKeysByProvider: Partial<Record<Provider, string>> = {}
 let openRouterLiveModelIds: string[] | undefined
 
-function isSelectableProvider(value: string | undefined): value is Extract<Provider, 'google' | 'openrouter'> {
+function isSelectableProvider(value: string | null | undefined): value is Extract<Provider, 'google' | 'openrouter'> {
   return value === 'google' || value === 'openrouter'
 }
 
@@ -59,13 +60,17 @@ function normalizeModelId(model: string | undefined): string | undefined {
   }
 
   if (
-    model === 'gemma-4'
+    model === 'gemma-3-27b-it'
+    || model === 'models/gemma-3-27b-it'
+    || model === 'gemma-4'
     || model === 'models/gemma-4'
     || model === 'gemma-4-it'
-    || model === 'gemma-4-31b-it'
+    || model === 'gemma-4-26b-a4b'
     || model === 'gemma-4-26b-a4b-it'
+    || model === 'gemma-4-31b'
+    || model === 'gemma-4-31b-it'
   ) {
-    return 'gemma-3-27b-it'
+    return GOOGLE_GEMMA_FALLBACK_MODEL
   }
 
   if (model === 'claude-haiku-4-5-20251001') {
@@ -124,7 +129,7 @@ async function initPopup() {
 
   apiKeyInput.value = draftApiKeysByProvider[savedProvider] ?? ''
   providerSelect.value = savedProvider
-  contextToggle.checked = prefs.includeConversationContext !== false
+  contextToggle.checked = prefs.includeConversationContext === true
 
   if (typeof normalizedModel === 'string') {
     draftModelByProvider[savedProvider] = normalizedModel

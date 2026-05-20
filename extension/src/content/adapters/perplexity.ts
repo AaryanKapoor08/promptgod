@@ -121,7 +121,7 @@ export class PerplexityAdapter implements PlatformAdapter {
     }
 
     // Reset React's internal value tracker so it recognizes this as a real change.
-    const tracker = (textarea as Record<string, unknown>)._valueTracker as
+    const tracker = (textarea as unknown as Record<string, unknown>)._valueTracker as
       { setValue: (v: string) => void } | undefined
     if (tracker) {
       tracker.setValue(value === '' ? '__promptgod_clear__' : '')

@@ -1,5 +1,6 @@
 import type { Provider } from '../lib/provider-policy'
 import type { OpenRouterAccountStatus } from '../lib/rewrite-openrouter/account-status'
+import { GOOGLE_GEMMA_FALLBACK_MODEL } from '../lib/rewrite-google/models'
 import {
   OPENROUTER_CURATED_FREE_MODELS,
   buildCuratedOpenRouterChain,
@@ -41,20 +42,20 @@ const PROVIDER_MODEL_OPTIONS: Record<Exclude<Provider, 'openrouter'>, ModelOptio
   ],
   google: [
     { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash', cost: 'Free tier available', tier: 'free' },
-    { label: 'Gemma 3 27B IT', value: 'gemma-3-27b-it', cost: 'Free tier available', tier: 'free' },
+    { label: 'Gemma 4 26B A4B IT', value: GOOGLE_GEMMA_FALLBACK_MODEL, cost: 'API access, availability varies', tier: 'free' },
     { label: 'Gemini 2.5 Flash Lite', value: 'gemini-2.5-flash-lite', cost: 'Manual option, free tier available', tier: 'free' },
   ],
 }
 
 export const VISIBLE_PROVIDER_CHAIN: VisibleChainItem[] = [
   { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
-  { label: 'Gemma', value: 'gemma-3-27b-it' },
+  { label: 'Gemma', value: GOOGLE_GEMMA_FALLBACK_MODEL },
   { label: 'OpenRouter Free Chain', value: 'openrouter-free-chain' },
 ]
 
 export const RECOMMENDED_GOOGLE_MODELS: VisibleChainItem[] = [
   { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
-  { label: 'Gemma 3 27B IT', value: 'gemma-3-27b-it' },
+  { label: 'Gemma 4 26B A4B IT', value: GOOGLE_GEMMA_FALLBACK_MODEL },
   { label: 'Gemini 2.5 Flash Lite', value: 'gemini-2.5-flash-lite' },
 ]
 

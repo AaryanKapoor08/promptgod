@@ -1,106 +1,89 @@
-import { ApiConfigStorage } from '../storage/api-config-storage';
-import { ProviderId } from '../services/ai/types';
-import { aiClient } from '../services/ai/ai-client';
+import { analyzeApiKey, type Provider } from '../lib/provider-policy'
+import { PreferenceManager } from '../lib/preferences'
 
-const PROVIDERS: Record<ProviderId, string> = {
-  google: 'Google Gemini',
-  openai: 'OpenAI',
-  anthropic: 'Anthropic',
-};
+type OptionsProvider = Extract<Provider, 'google' | 'openrouter'>
 
-export async function initApiKeySettings() {
-  const container = document.getElementById('api-keys-container');
-  if (!container) return;
+const PROVIDERS: Record<OptionsProvider, string> = {
+  google: 'Google',
+  openrouter: 'OpenRouter',
+}
 
-  const config = await ApiConfigStorage.getConfig();
+export async function initApiKeySettings(): Promise<void> {
+  const container = document.getElementById('api-keys-container')
+  const saveBtn = document.getElementById('save-all-keys')
+  if (!container || !(saveBtn instanceof HTMLButtonElement)) return
 
-  // Create input fields for each provider
-  for (const [id, name] of Object.entries(PROVIDERS)) {
-    const providerId = id as ProviderId;
-    
-    const wrapper = document.createElement('div');
-    wrapper.className = 'provider-key-wrapper';
-    
-    const labelRow = document.createElement('div');
-    labelRow.className = 'label-row';
-    
-    const label = document.createElement('label');
-    label.textContent = name;
-    
-    const validateBtn = document.createElement('button');
-    validateBtn.textContent = 'Validate';
-    validateBtn.className = 'btn btn--secondary btn--small';
-    
-    const statusIndicator = document.createElement('span');
-    statusIndicator.className = 'status-indicator';
-    statusIndicator.textContent = config.validationStatus[providerId] === 'valid' ? '✓ Valid' : '';
-    if (config.validationStatus[providerId] === 'invalid') {
-      statusIndicator.textContent = '✗ Invalid';
-      statusIndicator.className = 'status-indicator status--error';
-    }
+  const prefs = await PreferenceManager.getPreferences()
+  const keys = { ...(prefs.providerApiKeys ?? {}) } as Partial<Record<Provider, string>>
 
-    labelRow.appendChild(label);
-    labelRow.appendChild(validateBtn);
-    labelRow.appendChild(statusIndicator);
-    
-    const input = document.createElement('input');
-    input.type = 'password';
-    input.placeholder = `Enter ${name} API Key`;
-    input.className = 'input-field';
-    input.dataset.provider = providerId;
-    input.value = config.keys[providerId] || '';
-    
-    validateBtn.onclick = async () => {
-      validateBtn.disabled = true;
-      statusIndicator.textContent = 'Checking...';
-      
-      try {
-        const key = (input as HTMLInputElement).value.trim();
-        if (!key) {
-          statusIndicator.textContent = 'Key required';
-          statusIndicator.className = 'status-indicator status--error';
-        } else {
-          const isValid = await aiClient.validateKey(providerId, key);
-          statusIndicator.textContent = isValid ? '✓ Valid' : '✗ Invalid';
-          statusIndicator.className = `status-indicator ${isValid ? '' : 'status--error'}`;
-          
-          // Update config cache
-          const config = await ApiConfigStorage.getConfig();
-          config.validationStatus[providerId] = isValid ? 'valid' : 'invalid';
-          await ApiConfigStorage.saveConfig(config);
-        }
-      } catch (e) {
-        statusIndicator.textContent = 'Error';
-        statusIndicator.className = 'status-indicator status--error';
-      } finally {
-        validateBtn.disabled = false;
+  container.textContent = ''
+
+  for (const [providerId, name] of Object.entries(PROVIDERS) as Array<[OptionsProvider, string]>) {
+    const wrapper = document.createElement('div')
+    wrapper.className = 'provider-key-wrapper'
+
+    const labelRow = document.createElement('div')
+    labelRow.className = 'label-row'
+
+    const label = document.createElement('label')
+    label.textContent = name
+    label.htmlFor = `api-key-${providerId}`
+
+    const statusIndicator = document.createElement('span')
+    statusIndicator.className = 'status-indicator'
+
+    labelRow.append(label, statusIndicator)
+
+    const input = document.createElement('input')
+    input.id = `api-key-${providerId}`
+    input.type = 'password'
+    input.placeholder = `Enter ${name} API key`
+    input.className = 'input-field'
+    input.dataset.provider = providerId
+    input.value = keys[providerId] ?? ''
+
+    input.addEventListener('input', () => {
+      const analysis = analyzeApiKey(input.value)
+      if (!input.value.trim()) {
+        statusIndicator.textContent = ''
+        statusIndicator.className = 'status-indicator'
+      } else if (analysis.detectedProvider === providerId || !analysis.detectedProvider) {
+        statusIndicator.textContent = analysis.recognizedFormat ? 'Format recognized' : 'Will save for selected provider'
+        statusIndicator.className = 'status-indicator'
+      } else {
+        statusIndicator.textContent = 'Key format looks like another provider'
+        statusIndicator.className = 'status-indicator status--error'
       }
-    };
+    })
 
-    
-    wrapper.appendChild(labelRow);
-    wrapper.appendChild(input);
-    container.appendChild(wrapper);
+    wrapper.append(labelRow, input)
+    container.appendChild(wrapper)
   }
 
-  const saveBtn = document.getElementById('save-all-keys') as HTMLButtonElement;
   saveBtn.addEventListener('click', async () => {
-    const inputs = container.querySelectorAll('input[data-provider]');
-    const newConfig = await ApiConfigStorage.getConfig();
-    
-    inputs.forEach(input => {
-      const id = input.dataset.provider as ProviderId;
-      const val = (input as HTMLInputElement).value.trim();
-      if (val) {
-        newConfig.keys[id] = val;
-        newConfig.validationStatus[id] = 'unverified';
+    const nextKeys = { ...keys } as Partial<Record<Provider, string>>
+    const inputs = container.querySelectorAll<HTMLInputElement>('input[data-provider]')
+
+    inputs.forEach((input) => {
+      const providerId = input.dataset.provider as OptionsProvider | undefined
+      if (!providerId) return
+
+      const value = input.value.trim()
+      if (value) {
+        nextKeys[providerId] = value
       } else {
-        delete newConfig.keys[id];
-        delete newConfig.validationStatus[id];
+        delete nextKeys[providerId]
       }
-    });
-    
-    await ApiConfigStorage.saveConfig(newConfig);
-    alert('Settings saved successfully!');
-  });
+    })
+
+    const preferredProvider: OptionsProvider = nextKeys.google ? 'google' : 'openrouter'
+    const apiKey = nextKeys[preferredProvider] ?? ''
+    await PreferenceManager.updatePreferences({
+      apiKey,
+      provider: preferredProvider,
+      providerApiKeys: nextKeys,
+    })
+
+    window.alert('Settings saved successfully.')
+  })
 }

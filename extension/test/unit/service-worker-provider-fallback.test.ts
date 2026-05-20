@@ -113,7 +113,7 @@ describe('service worker provider fallback after validator failures', () => {
     expect(googleCall).toHaveBeenCalledTimes(3)
     expect(googleCall.mock.calls[0][3]).toBe('gemini-2.5-flash')
     expect(googleCall.mock.calls[1][3]).toBe('gemini-2.5-flash')
-    expect(googleCall.mock.calls[2][3]).toBe('gemma-3-27b-it')
+    expect(googleCall.mock.calls[2][3]).toBe('gemma-4-26b-a4b-it')
     expect(postedMessages(port)).not.toContainEqual({
       type: 'TOKEN',
       text: 'Write a launch update to [recipient] about [project].',
@@ -126,7 +126,7 @@ describe('service worker provider fallback after validator failures', () => {
 
   it('drops recent context for long self-contained non-Gemma LLM prompts', async () => {
     const rawPrompt = 'Use the Zendesk thread, Slack threads, customer Loom video, customer CSV, export job logs, and permissions screenshot to triage the customer data export escalation. Separate confirmed facts from assumptions, identify fast disproof checks, assign owners, draft a cautious customer update, and draft a separate internal update for Engineering, Support, and Customer Success.'
-    googleCall.mockResolvedValueOnce('Use the Zendesk thread, Slack threads, Loom video, customer CSV, export job logs, and permissions screenshot to triage the export escalation. Separate facts from assumptions, list fast disproof checks, assign owners, draft a cautious customer update, and draft a separate internal update for Engineering, Support, and Customer Success.')
+    googleCall.mockResolvedValueOnce('Create a data-export escalation triage prompt using evidence from Zendesk, Slack, the customer Loom, the customer CSV, export-job logs, and the permissions screenshot. Ask the model to separate facts from assumptions, propose quick disproof checks with owners, and produce distinct customer-facing and internal Engineering, Support, and Customer Success updates.')
 
     const port = createPort()
     await handleEnhance(
@@ -272,7 +272,7 @@ describe('service worker provider fallback after validator failures', () => {
     expect(googleCall).toHaveBeenCalledTimes(3)
     expect(googleCall.mock.calls[0][3]).toBe('gemini-2.5-flash')
     expect(googleCall.mock.calls[1][3]).toBe('gemini-2.5-flash')
-    expect(googleCall.mock.calls[2][3]).toBe('gemma-3-27b-it')
+    expect(googleCall.mock.calls[2][3]).toBe('gemma-4-26b-a4b-it')
     expect(postedMessages(port)).toContainEqual({
       type: 'RESULT',
       requestId: 'request-1',
@@ -335,7 +335,7 @@ describe('service worker provider fallback after validator failures', () => {
         branch: 'LLM',
         failureChain: expect.arrayContaining([
           expect.objectContaining({ provider: 'Google', model: 'gemini-2.5-flash' }),
-          expect.objectContaining({ provider: 'Gemma', model: 'gemma-3-27b-it' }),
+          expect.objectContaining({ provider: 'Gemma', model: 'gemma-4-26b-a4b-it' }),
           expect.objectContaining({ provider: 'OpenRouter', model: 'nvidia/nemotron-3-super-120b-a12b:free' }),
         ]),
       }),
@@ -397,7 +397,7 @@ describe('service worker provider fallback after validator failures', () => {
         branch: 'Text',
         failureChain: expect.arrayContaining([
           expect.objectContaining({ provider: 'Google', model: 'gemini-2.5-flash' }),
-          expect.objectContaining({ provider: 'Gemma', model: 'gemma-3-27b-it' }),
+          expect.objectContaining({ provider: 'Gemma', model: 'gemma-4-26b-a4b-it' }),
           expect.objectContaining({ provider: 'OpenRouter', model: 'nvidia/nemotron-3-super-120b-a12b:free' }),
         ]),
       }),

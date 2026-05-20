@@ -13,8 +13,16 @@ describe('popup model options', () => {
   it('renders recommended Google models before the compact fallback chain', () => {
     expect(RECOMMENDED_GOOGLE_MODELS.map((item) => item.label)).toEqual([
       'Gemini 2.5 Flash',
-      'Gemma 3 27B IT',
+      'Gemma 4 26B A4B IT',
       'Gemini 2.5 Flash Lite',
+    ])
+  })
+
+  it('keeps the Google dropdown on current Gemini API models', () => {
+    expect(getModelOptions('google').map((model) => model.value)).toEqual([
+      'gemini-2.5-flash',
+      'gemma-4-26b-a4b-it',
+      'gemini-2.5-flash-lite',
     ])
   })
 

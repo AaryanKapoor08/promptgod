@@ -62,7 +62,7 @@ describe('Gemma pipeline isolation', () => {
               return {
                 apiKey: 'AIzaTestKey',
                 provider: 'google',
-                model: 'gemma-3-27b-it',
+                model: 'gemma-4-26b-a4b-it',
                 includeConversationContext: true,
                 providerApiKeys: {},
               }
@@ -103,6 +103,52 @@ describe('Gemma pipeline isolation', () => {
     expect(mocks.repairRewrite).not.toHaveBeenCalled()
     expect(mocks.validateLlmBranchRewrite).not.toHaveBeenCalled()
     expect(postedMessages(port)).toContainEqual({ type: 'TOKEN', text: 'Rewrite this prompt directly.' })
+  })
+
+  it('does not post direct Gemma unchanged LLM output as a successful rewrite', async () => {
+    const rawPrompt = 'Use the Zendesk thread, Slack notes, customer CSV, export job logs, and permissions screenshot to separate known facts, guesses, next checks, customer update, and internal update for a data export escalation.'
+    googleCall.mockResolvedValueOnce(rawPrompt)
+
+    const port = createPort()
+    await handleEnhance(
+      port,
+      {
+        type: 'ENHANCE',
+        platform: 'chatgpt',
+        rawPrompt,
+        context: { isNewConversation: true, conversationLength: 0 },
+      } as never,
+      new AbortController().signal
+    )
+
+    expect(mocks.repairRewrite).not.toHaveBeenCalled()
+    expect(mocks.validateLlmBranchRewrite).not.toHaveBeenCalled()
+    expect(postedMessages(port)).not.toContainEqual({ type: 'TOKEN', text: rawPrompt })
+    expect(postedMessages(port)).toContainEqual({
+      type: 'ERROR',
+      message: 'Gemma returned the prompt unchanged. Switch to Gemini 2.5 Flash or another model and try again.',
+    })
+  })
+
+  it('returns a Gemma-specific timeout error instead of leaving direct Gemma stuck', async () => {
+    googleCall.mockRejectedValueOnce(new Error('[LLMClient] Request timed out after 25000ms'))
+
+    const port = createPort()
+    await handleEnhance(
+      port,
+      {
+        type: 'ENHANCE',
+        platform: 'chatgpt',
+        rawPrompt: 'how to learn java',
+        context: { isNewConversation: true, conversationLength: 0 },
+      } as never,
+      new AbortController().signal
+    )
+
+    expect(postedMessages(port)).toContainEqual({
+      type: 'ERROR',
+      message: 'Gemma did not return a rewrite before timing out. Switch to Gemini 2.5 Flash and try again.',
+    })
   })
 
   it('drops recent context for long self-contained direct Gemma LLM prompts', async () => {

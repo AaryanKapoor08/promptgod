@@ -6,18 +6,9 @@ import type { ContentMessage, ServiceWorkerMessage } from './lib/types'
 import { buildGemmaMetaPromptWithIntensity } from './lib/gemma-legacy/llm-branch'
 import {
   buildUserMessage,
-  callAnthropicAPI,
   callGoogleAPI,
-  callOpenAIAPI,
   callOpenRouterCompletionAPI,
-  callOpenRouterAPI,
-  parseAnthropicStream,
-  parseOpenAIStream,
 } from './lib/llm-client'
-import {
-  shouldRetryOpenRouterSameModel,
-  shouldRetryWithOpenRouterFallback,
-} from './lib/openrouter-retry'
 import { RequestSupervisor } from './background/supervisor'
 import { translateError } from './lib/error-translator'
 import { runPromptGodContextMenuHandler } from './content/context-menu-handler'
@@ -36,7 +27,7 @@ import { buildTextBranchSpec } from './lib/rewrite-text-branch/spec-builder'
 import { repairTextBranchRewrite } from './lib/rewrite-text-branch/repair'
 import { buildTextRetryUserMessage, shouldRetryTextBranch } from './lib/rewrite-text-branch/retry'
 import { validateTextBranchRewrite } from './lib/rewrite-text-branch/validator'
-import { GOOGLE_PRIMARY_MODEL, isGoogleGemmaModel } from './lib/rewrite-google/models'
+import { GOOGLE_GEMMA_FALLBACK_MODEL, GOOGLE_PRIMARY_MODEL, isGoogleGemmaModel } from './lib/rewrite-google/models'
 import { shouldEscalateGoogleToFallback } from './lib/rewrite-google/retry-policy'
 import { inspectOpenRouterAccountStatus, markOpenRouterDailyCapReached, resetOpenRouterAccountStatusSession } from './lib/rewrite-openrouter/account-status'
 import { getOpenRouterMaxTokens } from './lib/rewrite-openrouter/budget-policy'
@@ -58,9 +49,9 @@ import {
   shouldTryNextOpenRouterModel,
 } from './lib/rewrite-openrouter/route-policy'
 
-const STREAM_STALL_TIMEOUT_MS = 45000
-const OPENROUTER_FIRST_TOKEN_TIMEOUT_MS = 20000
 const REQUEST_SUPERVISOR_TIMEOUT_MS = 65000
+const SUPERVISOR_HEARTBEAT_MS = 30000
+const OPENROUTER_CATALOG_ALARM_NAME = 'promptgod-openrouter-catalog-refresh'
 export const CONTEXT_MENU_ID = 'promptgod-context-enhance'
 export const CONTEXT_MENU_TITLE = 'Enhance with PromptGod'
 export const CONTEXT_SELECTION_MAX_CHARS = 10000
@@ -91,13 +82,15 @@ function isGoogleGemmaModelId(model: string | undefined): boolean {
 
 function mapRewriteProvider(provider: string | undefined): RewriteProvider {
   if (provider === 'openrouter') return 'OpenRouter'
-  if (provider === 'openai') return 'OpenAI'
-  if (provider === 'anthropic') return 'Anthropic'
   return 'Google'
 }
 
-type StreamProgress = {
-  sentAnyToken: boolean
+function assertActiveProvider(provider: string | undefined): void {
+  if (provider === undefined || provider === 'google' || provider === 'openrouter') {
+    return
+  }
+
+  throw new Error(`Unsupported provider: ${provider}. Use a Google or OpenRouter key.`)
 }
 
 type ProviderFailureChainEntry = {
@@ -107,9 +100,6 @@ type ProviderFailureChainEntry = {
   stage: 'primary' | 'fallback' | 'final-chain'
   failure: string
 }
-
-// Retryable HTTP statuses (pre-first-token only)
-const RETRY_DELAY_MS = 1000
 
 const supervisor = new RequestSupervisor({
   timeoutMs: REQUEST_SUPERVISOR_TIMEOUT_MS,
@@ -125,6 +115,36 @@ const supervisor = new RequestSupervisor({
 
 console.info('[PromptGod] Service worker started')
 
+function startSupervisorHeartbeat(port: chrome.runtime.Port): () => void {
+  const timer = setInterval(() => {
+    supervisor.touch(port)
+  }, SUPERVISOR_HEARTBEAT_MS)
+
+  return () => clearInterval(timer)
+}
+
+async function restrictStorageToTrustedContexts(): Promise<void> {
+  const storageArea = chrome.storage?.local as chrome.storage.StorageArea & {
+    setAccessLevel?: (options: { accessLevel: 'TRUSTED_CONTEXTS' }) => void | Promise<void>
+  }
+
+  if (!storageArea?.setAccessLevel) {
+    return
+  }
+
+  await Promise.resolve(storageArea.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }))
+}
+
+function scheduleOpenRouterCatalogAlarm(): void {
+  if (!chrome.alarms?.create) {
+    return
+  }
+
+  void chrome.alarms.create(OPENROUTER_CATALOG_ALARM_NAME, {
+    periodInMinutes: Math.max(1, OPENROUTER_CATALOG_TTL_MS / 60000),
+  })
+}
+
 // --- Settings cache ---
 // Avoids hitting chrome.storage.local.get on every enhance request.
 // Invalidated via chrome.storage.onChanged listener.
@@ -136,6 +156,14 @@ let cachedSettings: {
   providerApiKeys?: Record<string, string>
 } | null = null
 
+type StoredSettings = {
+  apiKey?: string
+  provider?: string
+  model?: string
+  includeConversationContext?: boolean
+  providerApiKeys?: Record<string, string>
+}
+
 async function getSettings(): Promise<{
   apiKey?: string
   provider?: string
@@ -144,7 +172,7 @@ async function getSettings(): Promise<{
   providerApiKeys?: Record<string, string>
 }> {
   if (!cachedSettings) {
-    const storedSettings = await chrome.storage.local.get(['apiKey', 'provider', 'model', 'includeConversationContext', 'providerApiKeys']) as typeof cachedSettings
+    const storedSettings = await chrome.storage.local.get(['apiKey', 'provider', 'model', 'includeConversationContext', 'providerApiKeys']) as StoredSettings
     const provider = storedSettings?.provider
     const providerApiKeys = storedSettings?.providerApiKeys
     const resolvedApiKey = provider && providerApiKeys ? providerApiKeys[provider] ?? storedSettings?.apiKey : storedSettings?.apiKey
@@ -304,6 +332,10 @@ async function injectContextEnhanceRequest(
 }
 
 export function initServiceWorker() {
+  void restrictStorageToTrustedContexts().catch((error) => {
+    console.info({ cause: error }, '[PromptGod] Could not restrict storage access level')
+  })
+
   chrome.storage.onChanged.addListener(() => {
     cachedSettings = null
     resetOpenRouterAccountStatusSession()
@@ -312,12 +344,14 @@ export function initServiceWorker() {
   registerContextMenu()
   chrome.runtime.onInstalled?.addListener(() => {
     registerContextMenu()
+    scheduleOpenRouterCatalogAlarm()
     void refreshOpenRouterCatalog().catch((error) => {
       console.info({ cause: error }, '[PromptGod] OpenRouter catalog refresh failed on install')
     })
   })
   chrome.runtime.onStartup?.addListener(() => {
     registerContextMenu()
+    scheduleOpenRouterCatalogAlarm()
     void refreshOpenRouterCatalog().catch((error) => {
       console.info({ cause: error }, '[PromptGod] OpenRouter catalog refresh failed on startup')
     })
@@ -326,16 +360,59 @@ export function initServiceWorker() {
     void handleContextMenuClick(info, tab)
   })
 
-  setInterval(() => {
+  scheduleOpenRouterCatalogAlarm()
+  chrome.alarms?.onAlarm?.addListener((alarm) => {
+    if (alarm.name !== OPENROUTER_CATALOG_ALARM_NAME) {
+      return
+    }
+
     void refreshOpenRouterCatalog().catch((error) => {
-      console.info({ cause: error }, '[PromptGod] OpenRouter catalog background refresh failed')
+      console.info({ cause: error }, '[PromptGod] OpenRouter catalog alarm refresh failed')
     })
-  }, OPENROUTER_CATALOG_TTL_MS)
+  })
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === 'PING') {
       sendResponse({ type: 'PONG' })
+      return false
     }
+
+    if (msg.type === 'GET_CONTENT_SETTINGS') {
+      void getSettings()
+        .then((settings) => {
+          sendResponse({
+            type: 'CONTENT_SETTINGS',
+            includeConversationContext: settings.includeConversationContext === true,
+            model: settings.model,
+          })
+        })
+        .catch(() => {
+          sendResponse({
+            type: 'CONTENT_SETTINGS',
+            includeConversationContext: false,
+          })
+        })
+      return true
+    }
+
+    if (msg.type === 'GET_TOOLTIP_STATE') {
+      void chrome.storage.local.get(['hasSeenTooltip'])
+        .then((result) => {
+          sendResponse({ type: 'TOOLTIP_STATE', hasSeenTooltip: result.hasSeenTooltip === true })
+        })
+        .catch(() => {
+          sendResponse({ type: 'TOOLTIP_STATE', hasSeenTooltip: true })
+        })
+      return true
+    }
+
+    if (msg.type === 'SET_TOOLTIP_SEEN') {
+      void chrome.storage.local.set({ hasSeenTooltip: true })
+        .then(() => sendResponse({ type: 'TOOLTIP_STATE', hasSeenTooltip: true }))
+        .catch(() => sendResponse({ type: 'TOOLTIP_STATE', hasSeenTooltip: true }))
+      return true
+    }
+
     return false
   })
 
@@ -377,9 +454,11 @@ export async function handleEnhance(
   )
 
   supervisor.start(port)
+  let stopHeartbeat: (() => void) | undefined
 
   try {
     sendMessage(port, { type: 'START' })
+    stopHeartbeat = startSupervisorHeartbeat(port)
 
     const { apiKey, provider, model, providerApiKeys } = await getSettings()
 
@@ -392,6 +471,7 @@ export async function handleEnhance(
       port.disconnect()
       return
     }
+    assertActiveProvider(provider)
 
     // BYOK mode — direct API call
     const promptWordCount = msg.rawPrompt.trim().split(/\s+/).length
@@ -436,129 +516,25 @@ export async function handleEnhance(
       '[PromptGod] Calling LLM API (BYOK)'
     )
 
-    // Route to the correct provider, passing the selected model
-    if (provider === 'openrouter') {
-      const requestedModel = normalizeOpenRouterModelId((model ?? '').trim() || OPENROUTER_PRIMARY_FREE_MODEL)
-      const modelsToTry = await buildOpenRouterModelChain(requestedModel)
-
-      let sentAnyToken = false
-      let openRouterSucceeded = false
-      let lastError: unknown = null
-      let rateLimitAttempt = 0
-
-      outer:
-      for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
-        const currentModel = modelsToTry[modelIndex]
-        let sameModelRetriesRemaining = 1
-
-        while (true) {
-          const attemptProgress: StreamProgress = { sentAnyToken: false }
-          const cooldownRemaining = getOpenRouterCooldownRemainingMs(currentModel)
-          if (cooldownRemaining > 0) {
-            await delay(Math.min(cooldownRemaining, 1500))
-            break
-          }
-
-          const maxTokens = getOpenRouterMaxTokens(currentModel, promptWordCount)
-
-          try {
-            await streamOpenRouter(
-              port,
-              apiKey,
-              systemPrompt,
-              userMessage,
-              currentModel,
-              maxTokens,
-              signal,
-              attemptProgress
-            )
-            openRouterSucceeded = true
-            break outer
-          } catch (error) {
-            lastError = error
-            sentAnyToken = attemptProgress.sentAnyToken || sentAnyToken
-
-            if (isOpenRouterDailyCapError(error)) {
-              const dailyCapError = buildOpenRouterDailyCapError(error)
-              console.info({ currentModel }, '[PromptGod] OpenRouter free-models-per-day cap reached; pausing chain')
-              lastError = dailyCapError
-              break outer
-            }
-
-            if (isOpenRouterRateLimitError(error)) {
-              rateLimitAttempt++
-              const backoffMs = computeOpenRouterRateLimitBackoffMs(error, rateLimitAttempt)
-              setOpenRouterModelCooldown(currentModel, Math.max(OPENROUTER_MODEL_COOLDOWN_MS, backoffMs))
-              console.info({ currentModel, backoffMs }, '[PromptGod] OpenRouter rate limited, cooling model and backing off')
-              await delay(backoffMs)
-            }
-
-            // Never retry after tokens were already streamed: avoids duplicated prompt output.
-            if (sentAnyToken) {
-              break outer
-            }
-
-            if (
-              sameModelRetriesRemaining > 0
-              && shouldRetryOpenRouterSameModel(attemptProgress.sentAnyToken, error)
-            ) {
-              sameModelRetriesRemaining--
-              console.info({ currentModel }, '[PromptGod] Retrying OpenRouter on same model')
-              continue
-            }
-
-            const hasFallbackModel = modelIndex < modelsToTry.length - 1
-            if (
-              hasFallbackModel
-              && shouldRetryWithOpenRouterFallback(currentModel, attemptProgress.sentAnyToken, error)
-            ) {
-              const fallbackModel = modelsToTry[modelIndex + 1]
-              console.info({ currentModel, fallback: fallbackModel }, '[PromptGod] Retrying with fallback model')
-              break
-            }
-
-            break outer
-          }
-        }
-      }
-
-      if (!openRouterSucceeded) {
-        throw lastError ?? new Error('[ServiceWorker] OpenRouter request failed')
-      }
-    } else if (provider === 'anthropic') {
-      const response = await callWithRetry(
-        () => callAnthropicAPI(apiKey, systemPrompt, userMessage, model),
-        signal
-      )
-      for await (const text of withStallTimeout(parseAnthropicStream(response), STREAM_STALL_TIMEOUT_MS)) {
-        sendMessage(port, { type: 'TOKEN', text })
-      }
-    } else if (provider === 'openai') {
-      const response = await callWithRetry(
-        () => callOpenAIAPI(apiKey, systemPrompt, userMessage, model),
-        signal
-      )
-      for await (const text of withStallTimeout(parseOpenAIStream(response), STREAM_STALL_TIMEOUT_MS)) {
-        sendMessage(port, { type: 'TOKEN', text })
-      }
-    } else if (provider === 'google') {
-      const responseText = await callGoogleAPI(
+    let responseText: string
+    try {
+      responseText = await callGoogleAPI(
         apiKey,
         systemPrompt,
         userMessage,
         model ?? GOOGLE_PRIMARY_MODEL,
         512
       )
-      sendMessage(port, { type: 'TOKEN', text: responseText })
-    } else {
-      sendMessage(port, {
-        type: 'ERROR',
-        message: `Unsupported provider: ${provider}. Use an Anthropic, OpenAI, Google, or OpenRouter key.`,
-        code: 'UNSUPPORTED_PROVIDER',
-      })
-      disconnectPortSoon(port)
-      return
+    } catch (error) {
+      if (isGoogleGemmaModelId(model) && isGemmaTimeoutError(error)) {
+        throw new DirectGemmaTimeoutError(error)
+      }
+      throw error
     }
+    if (isGoogleGemmaModelId(model) && isNoChangeLlmOutput(msg.rawPrompt, responseText)) {
+      throw new DirectGemmaNoChangeError()
+    }
+    sendMessage(port, { type: 'TOKEN', text: responseText })
 
     sendMessage(port, { type: 'DONE' })
     sendMessage(port, { type: 'SETTLEMENT', status: 'DONE' })
@@ -586,6 +562,7 @@ export async function handleEnhance(
     sendMessage(port, { type: 'SETTLEMENT', status: 'ERROR', message: errorMessage })
     disconnectPortSoon(port)
   } finally {
+    stopHeartbeat?.()
     supervisor.stop(port)
   }
 }
@@ -628,6 +605,22 @@ class AllProvidersFailedError extends Error {
   }
 }
 
+class DirectGemmaNoChangeError extends Error {
+  constructor() {
+    super('[ServiceWorker] Direct Gemma returned the prompt unchanged')
+    this.name = 'DirectGemmaNoChangeError'
+  }
+}
+
+class DirectGemmaTimeoutError extends Error {
+  constructor(cause: unknown) {
+    super('[ServiceWorker] Direct Gemma timed out before returning a rewrite', {
+      cause: cause instanceof Error ? cause : undefined,
+    })
+    this.name = 'DirectGemmaTimeoutError'
+  }
+}
+
 function selectLlmRecentContext(
   rawPrompt: string,
   context: { isNewConversation: boolean; conversationLength: number },
@@ -659,6 +652,10 @@ function countWords(text: string): number {
 
 function explicitlyReferencesPriorContext(text: string): boolean {
   return /\b(?:above|previous|earlier|last (?:message|answer|response|reply)|previous (?:message|answer|response|reply|draft|output)|the (?:above|previous) (?:message|answer|response|reply|draft|output)|this (?:answer|response|reply|conversation|thread|chat)|from (?:this|the) (?:conversation|thread|chat)|as discussed|you just (?:said|wrote|gave|mentioned)|what you (?:just )?(?:said|wrote|gave|mentioned)|use (?:that|the above|the previous)|continue from)\b/i.test(text)
+}
+
+function isGemmaTimeoutError(error: unknown): boolean {
+  return error instanceof Error && /Request timed out after|overall request budget exceeded/i.test(error.message)
 }
 
 async function runLlmBranchWithProviderFallback(request: LlmBranchPipelineRequest): Promise<string> {
@@ -699,7 +696,7 @@ async function runLlmBranchWithProviderFallback(request: LlmBranchPipelineReques
     const gemmaOutput = await collectContextEnhancementText({
       apiKey: request.apiKey,
       provider: 'google',
-      model: 'gemma-3-27b-it',
+      model: GOOGLE_GEMMA_FALLBACK_MODEL,
       systemPrompt,
       userMessage,
       promptWordCount: request.promptWordCount,
@@ -710,7 +707,7 @@ async function runLlmBranchWithProviderFallback(request: LlmBranchPipelineReques
     }
     return gemmaOutput
   } catch (error) {
-    failureChain.push(buildFailureChainEntry('LLM', 'Gemma', 'gemma-3-27b-it', 'fallback', error))
+    failureChain.push(buildFailureChainEntry('LLM', 'Gemma', GOOGLE_GEMMA_FALLBACK_MODEL, 'fallback', error))
     if (!(error instanceof RewriteValidationFailure) && !shouldEscalateGoogleToFallback(error)) {
       throw error
     }
@@ -909,7 +906,7 @@ async function runTextBranchWithProviderFallback(request: TextBranchPipelineRequ
       await collectContextEnhancementText({
         apiKey: request.apiKey,
         provider: 'google',
-        model: 'gemma-3-27b-it',
+        model: GOOGLE_GEMMA_FALLBACK_MODEL,
         systemPrompt: buildGemmaSelectedTextMetaPrompt(request.promptWordCount),
         userMessage: buildContextUserMessage(request.selectedText),
         promptWordCount: request.promptWordCount,
@@ -918,7 +915,7 @@ async function runTextBranchWithProviderFallback(request: TextBranchPipelineRequ
       request.selectedText
     )
   } catch (error) {
-    failureChain.push(buildFailureChainEntry('Text', 'Gemma', 'gemma-3-27b-it', 'fallback', error))
+    failureChain.push(buildFailureChainEntry('Text', 'Gemma', GOOGLE_GEMMA_FALLBACK_MODEL, 'fallback', error))
     if (!shouldEscalateGoogleToFallback(error)) {
       throw error
     }
@@ -1067,9 +1064,11 @@ export async function handleContextEnhance(
   )
 
   supervisor.start(port)
+  let stopHeartbeat: (() => void) | undefined
 
   try {
     sendMessage(port, { type: 'START' })
+    stopHeartbeat = startSupervisorHeartbeat(port)
 
     const validation = validateContextSelection(msg.selectedText)
     if (!validation.ok) {
@@ -1096,6 +1095,7 @@ export async function handleContextEnhance(
       disconnectPortSoon(port)
       return
     }
+    assertActiveProvider(provider)
 
     const selectedText = validation.selectedText
     const promptWordCount = selectedText.trim().split(/\s+/).length
@@ -1170,6 +1170,7 @@ export async function handleContextEnhance(
     sendMessage(port, { type: 'SETTLEMENT', status: 'ERROR', message: errorMessage })
     disconnectPortSoon(port)
   } finally {
+    stopHeartbeat?.()
     supervisor.stop(port)
   }
 }
@@ -1197,22 +1198,6 @@ async function collectContextEnhancementText({
     return await collectOpenRouterCompletionText(apiKey, systemPrompt, userMessage, model, promptWordCount, signal)
   }
 
-  if (provider === 'anthropic') {
-    const response = await callWithRetry(
-      () => callAnthropicAPI(apiKey, systemPrompt, userMessage, model),
-      signal
-    )
-    return await collectStreamText(parseAnthropicStream(response), signal)
-  }
-
-  if (provider === 'openai') {
-    const response = await callWithRetry(
-      () => callOpenAIAPI(apiKey, systemPrompt, userMessage, model),
-      signal
-    )
-    return await collectStreamText(parseOpenAIStream(response), signal)
-  }
-
   if (provider === 'google') {
     return await callGoogleAPI(
       apiKey,
@@ -1223,7 +1208,7 @@ async function collectContextEnhancementText({
     )
   }
 
-  throw new Error(`Unsupported provider: ${provider}. Use an Anthropic, OpenAI, Google, or OpenRouter key.`)
+  throw new Error(`Unsupported provider: ${provider}. Use a Google or OpenRouter key.`)
 }
 
 async function collectOpenRouterCompletionText(
@@ -1257,19 +1242,17 @@ async function collectOpenRouterCompletionText(
     const currentModel = modelsToTry[modelIndex]
     const cooldownRemaining = getOpenRouterCooldownRemainingMs(currentModel)
     if (cooldownRemaining > 0) {
-      await delay(Math.min(cooldownRemaining, 1500))
-      if (signal.aborted) {
-        throw new Error('[ServiceWorker] Context enhancement aborted')
-      }
+      perModelFailures.push({
+        model: currentModel,
+        failure: `model cooling down for ${Math.ceil(cooldownRemaining / 1000)}s`,
+      })
+      console.info({ currentModel, cooldownRemaining }, '[PromptGod] Skipping cooled OpenRouter model')
+      continue
     }
-
     const maxTokens = getOpenRouterMaxTokens(currentModel, promptWordCount)
 
     try {
-      return await callWithRetry(
-        () => callOpenRouterCompletionAPI(apiKey, systemPrompt, userMessage, currentModel, maxTokens),
-        signal
-      )
+      return await callOpenRouterCompletionAPI(apiKey, systemPrompt, userMessage, currentModel, maxTokens)
     } catch (error) {
       lastError = error
 
@@ -1311,19 +1294,6 @@ async function collectOpenRouterCompletionText(
   )
 }
 
-async function collectStreamText(source: AsyncGenerator<string, void, unknown>, signal: AbortSignal): Promise<string> {
-  const chunks: string[] = []
-
-  for await (const text of withStallTimeout(source, STREAM_STALL_TIMEOUT_MS)) {
-    if (signal.aborted) {
-      throw new Error('[ServiceWorker] Context enhancement aborted')
-    }
-    chunks.push(text)
-  }
-
-  return chunks.join('')
-}
-
 async function incrementCounter(key: 'totalEnhancements' | 'errorCount', platform?: string): Promise<void> {
   try {
     const data = await chrome.storage.local.get([key, 'enhancementsByPlatform'])
@@ -1360,6 +1330,14 @@ function formatErrorMessage(error: unknown): string {
 
   if (error instanceof AllProvidersFailedError || /All providers failed/i.test(error.message)) {
     return 'No provider returned a usable rewrite. Retry once, or save an OpenRouter key/custom model and try again.'
+  }
+
+  if (error instanceof DirectGemmaNoChangeError || /Direct Gemma returned the prompt unchanged/i.test(error.message)) {
+    return 'Gemma returned the prompt unchanged. Switch to Gemini 2.5 Flash or another model and try again.'
+  }
+
+  if (error instanceof DirectGemmaTimeoutError || /Direct Gemma timed out/i.test(error.message)) {
+    return 'Gemma did not return a rewrite before timing out. Switch to Gemini 2.5 Flash and try again.'
   }
 
   if (/OpenRouter completion returned no text output|OpenRouter curated chain exhausted|ended before emitting tokens|timed out while waiting for tokens|stream stalled/i.test(error.message)) {
@@ -1410,38 +1388,6 @@ function formatErrorMessage(error: unknown): string {
   return genericTranslated
 }
 
-/** Single retry with 1s backoff for 429 and 5xx. No retry on 401/403/422. */
-async function callWithRetry(
-  callFn: () => Promise<Response>,
-  signal: AbortSignal
-): Promise<Response> {
-  try {
-    return await callFn()
-  } catch (error) {
-    if (signal.aborted) throw error
-
-    const status = extractHttpStatus(error)
-    if (status !== null && isRetryableHttpStatus(status)) {
-      console.info({ status }, '[PromptGod] Retrying after transient error')
-      await delay(RETRY_DELAY_MS)
-      if (signal.aborted) throw error
-      return await callFn()
-    }
-
-    throw error
-  }
-}
-
-function isRetryableHttpStatus(status: number): boolean {
-  return status === 429 || (status >= 500 && status <= 599)
-}
-
-function extractHttpStatus(error: unknown): number | null {
-  if (!(error instanceof Error)) return null
-  const match = error.message.match(/returned (\d{3})/)
-  return match ? parseInt(match[1], 10) : null
-}
-
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -1465,98 +1411,3 @@ export function sendMessage(port: chrome.runtime.Port, msg: ServiceWorkerMessage
   }
 }
 
-async function streamOpenRouter(
-  port: chrome.runtime.Port,
-  apiKey: string,
-  systemPrompt: string,
-  userMessage: string,
-  model: string,
-  maxTokens: number,
-  signal: AbortSignal,
-  progress: StreamProgress
-): Promise<void> {
-  const response = await callWithRetry(
-    () => callOpenRouterAPI(apiKey, systemPrompt, userMessage, model, maxTokens),
-    signal
-  )
-  const stream = parseOpenAIStream(response)
-
-  try {
-    const first = await nextWithTimeout(stream, OPENROUTER_FIRST_TOKEN_TIMEOUT_MS)
-    if (first.done) {
-      throw new Error('[ServiceWorker] OpenRouter stream ended before emitting tokens')
-    }
-
-    progress.sentAnyToken = true
-    sendMessage(port, { type: 'TOKEN', text: first.value })
-
-    while (true) {
-      const next = await nextWithTimeout(stream, STREAM_STALL_TIMEOUT_MS)
-      if (next.done) {
-        // Gemma free models sometimes end without a formal 'done' if the connection drops,
-        // but nextWithTimeout will handle the stall. 
-        break
-      }
-      progress.sentAnyToken = true
-      sendMessage(port, { type: 'TOKEN', text: next.value })
-    }
-  } catch (error) {
-    if (!progress.sentAnyToken && shouldFallbackToOpenRouterCompletion(error)) {
-      const text = await callOpenRouterCompletionAPI(apiKey, systemPrompt, userMessage, model, maxTokens)
-      progress.sentAnyToken = true
-      sendMessage(port, { type: 'TOKEN', text })
-      return
-    }
-
-    if (isTimeoutLike(error)) {
-      throw new Error('[ServiceWorker] OpenRouter stream timed out while waiting for tokens', {
-        cause: error,
-      })
-    }
-    throw error
-  }
-}
-
-function isTimeoutLike(error: unknown): boolean {
-  return error instanceof Error
-    && (/timed out/i.test(error.message) || /stalled/i.test(error.message))
-}
-
-function shouldFallbackToOpenRouterCompletion(error: unknown): boolean {
-  return error instanceof Error
-    && (/ended before emitting tokens/i.test(error.message) || /timed out/i.test(error.message) || /stalled/i.test(error.message))
-}
-
-async function* withStallTimeout<T>(
-  source: AsyncGenerator<T>,
-  timeoutMs: number
-): AsyncGenerator<T, void, unknown> {
-  while (true) {
-    const result = await nextWithTimeout(source, timeoutMs)
-    if (result.done) {
-      return
-    }
-    yield result.value
-  }
-}
-
-async function nextWithTimeout<T>(
-  source: AsyncGenerator<T>,
-  timeoutMs: number
-): Promise<IteratorResult<T, void>> {
-  return await new Promise<IteratorResult<T, void>>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error(`[ServiceWorker] Stream stalled for ${timeoutMs}ms`))
-    }, timeoutMs)
-
-    source.next()
-      .then((result) => {
-        clearTimeout(timeout)
-        resolve(result)
-      })
-      .catch((error) => {
-        clearTimeout(timeout)
-        reject(error)
-      })
-  })
-}

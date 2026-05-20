@@ -22,7 +22,7 @@ export const PROVIDER_POLICIES: Record<Provider, ProviderPolicy> = {
   },
   google: {
     keyRegex: /^AIza[a-zA-Z0-9_-]+$/,
-    supportedModels: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemma-3-27b-it'],
+    supportedModels: ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemma-4-26b-a4b-it'],
   },
   openrouter: {
     keyRegex: /^sk-or-[a-zA-Z0-9-]+$/,
