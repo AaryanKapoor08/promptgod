@@ -32,6 +32,20 @@ describe('rewrite-core validate', () => {
     expect(issueCodesFor('use the logs for triage', 'My goal is to perform a serious triage of this issue.')).toContain('FIRST_PERSON_BRIEF')
   })
 
+  it('emits GENERIC_PROJECT_BRIEF for personal-agent project drift', () => {
+    expect(issueCodesFor(
+      'can i build some sort of personal agent for me as a resume project, something which does stuff for me and helps me out',
+      'Explore the feasibility of building a personal agent as a resume project. This agent should automate tasks and provide assistance. Consider incorporating advanced concepts.'
+    )).toContain('GENERIC_PROJECT_BRIEF')
+  })
+
+  it('emits GENERIC_PROJECT_BRIEF for Nemotron personal-agent generic drift', () => {
+    expect(issueCodesFor(
+      'i also want to play around with the latest stuff like hermes agent and carrier ops etc etc jepa. can i rather build some sort of personal agent for me? as a resume project, something which does stuff for me and helps me out',
+      'Explore building a personal AI agent using recent technologies such as Hermes Agent, Carrier Ops, and JEPA as a resume project. The goal is to create a system that performs useful tasks and provides assistance tailored to personal needs. Focus on integrating these tools to develop a functional, self-directed agent that demonstrates practical application of current AI advancements.'
+    )).toContain('GENERIC_PROJECT_BRIEF')
+  })
+
   it('emits ASKED_FORBIDDEN_QUESTION', () => {
     expect(issueCodesFor('Never ask clarifying questions. Rewrite this message.', 'Who is the recipient?', 'Text')).toContain('ASKED_FORBIDDEN_QUESTION')
   })
@@ -63,6 +77,13 @@ describe('rewrite-core validate', () => {
     expect(issueCodesFor(source, source)).toContain('UNCHANGED_REWRITE')
   })
 
+  it('emits NEAR_ECHO_REWRITE for long copy-with-minor-edits outputs', () => {
+    const source = 'Use the Zendesk thread, Slack notes, customer CSV, export job logs, and permissions screenshot to separate known facts, guesses, next checks, customer update, and internal update for a data export escalation.'
+    const output = 'Use the Zendesk ticket, Slack notes, customer CSV, export job logs, and permissions screenshot to separate known facts, guesses, next checks, customer update, and internal update for a data export escalation.'
+
+    expect(issueCodesFor(source, output)).toContain('NEAR_ECHO_REWRITE')
+  })
+
   it('accepts a simple valid rewrite', () => {
     expect(validateRewrite({
       branch: 'LLM',
@@ -74,7 +95,7 @@ describe('rewrite-core validate', () => {
     })
   })
 
-  it('allows compressed analytics constraints while preserve-token validation is disabled', () => {
+  it('rejects compressed analytics constraints when preserve-token validation fails', () => {
     expect(compressedFlashRewrite).toContain('Postgres')
     expect(compressedFlashRewrite).toContain('ClickHouse')
     expect(compressedFlashRewrite).toContain('BigQuery')
@@ -92,8 +113,8 @@ describe('rewrite-core validate', () => {
       constraints: extractConstraints(analyticsDecisionPrompt),
     })
 
-    expect(result.ok).toBe(true)
-    expect(result.issues.map((issue) => issue.code)).not.toContain('DROPPED_PRESERVE_TOKEN')
+    expect(result.ok).toBe(false)
+    expect(result.issues.map((issue) => issue.code)).toContain('DROPPED_PRESERVE_TOKEN')
   })
 
   it('accepts an analytics rewrite that keeps the proper nouns explicit', () => {
@@ -134,7 +155,7 @@ Keep MongoDB and prior conversation context out of scope, and call out the small
     expect(result.issues.map((issue) => issue.code)).not.toContain('DROPPED_PRESERVE_TOKEN')
   })
 
-  it('allows the observed Flash Lite compression of manual Prompt 3 while preserve-token validation is disabled', () => {
+  it('rejects observed Flash Lite compression of manual Prompt 3 when preserved details disappear', () => {
     const result = validateRewrite({
       branch: 'LLM',
       sourceText: manualPrompt3,
@@ -142,7 +163,7 @@ Keep MongoDB and prior conversation context out of scope, and call out the small
       constraints: extractConstraints(manualPrompt3),
     })
 
-    expect(result.ok).toBe(true)
-    expect(result.issues.map((issue) => issue.code)).not.toContain('DROPPED_PRESERVE_TOKEN')
+    expect(result.ok).toBe(false)
+    expect(result.issues.map((issue) => issue.code)).toContain('DROPPED_PRESERVE_TOKEN')
   })
 })

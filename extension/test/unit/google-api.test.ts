@@ -29,16 +29,18 @@ describe('Google API client helpers', () => {
     expect(models).toEqual(['gemini-2.5-flash', 'gemini-2.5-pro'])
   })
 
-  it('maps legacy gemma-4 ids to gemma-3-27b-it', async () => {
-    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
-      candidates: [{ content: { parts: [{ text: 'Rewritten prompt' }] } }],
-    }), { status: 200 }))
+  it('maps legacy Gemma ids to the current Gemma 4 fallback model', async () => {
+    for (const model of ['gemma-3-27b-it', 'gemma-4', 'gemma-4-26b-a4b-it', 'gemma-4-31b-it']) {
+      mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: 'Rewritten prompt' }] } }],
+      }), { status: 200 }))
 
-    const text = await callGoogleAPI('AIzaTestKey', 'system', 'user', 'gemma-4')
+      const text = await callGoogleAPI('AIzaTestKey', 'system', 'user', model)
 
-    expect(text).toBe('Rewritten prompt')
-    const calledUrl = String(mockFetch.mock.calls[0][0])
-    expect(calledUrl).toContain('/models/gemma-3-27b-it:generateContent')
+      expect(text).toBe('Rewritten prompt')
+      const calledUrl = String(mockFetch.mock.calls[mockFetch.mock.calls.length - 1][0])
+      expect(calledUrl).toContain('/models/gemma-4-26b-a4b-it:generateContent')
+    }
   })
 
   it('surfaces a 404 model error for provider-policy escalation', async () => {
@@ -91,6 +93,28 @@ describe('Google API client helpers', () => {
     await expect(
       callGoogleAPI('AIzaTestKey', 'system', 'user', 'gemini-2.5-flash')
     ).rejects.toThrow('Google API returned unusable output (finish reason: SAFETY)')
+  })
+
+  it('rejects MAX_TOKENS partial text outputs after the retry window', async () => {
+    mockFetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'Give me a roadmap with' }] } }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: 'Give me a roadmap with' }] } }],
+      }), { status: 200 }))
+
+    await expect(
+      callGoogleAPI('AIzaTestKey', 'system', 'user', 'gemini-2.5-flash')
+    ).rejects.toThrow('Google API returned unusable output (finish reason: MAX_TOKENS)')
+  })
+
+  it('surfaces malformed Google JSON responses for provider fallback', async () => {
+    mockFetch.mockResolvedValueOnce(new Response('not-json', { status: 200 }))
+
+    await expect(
+      callGoogleAPI('AIzaTestKey', 'system', 'user', 'gemini-2.5-flash')
+    ).rejects.toThrow('Google API returned malformed JSON response')
   })
 
   it('uses header auth and disables thinking for Gemini 2.5 Flash rewrites', async () => {
@@ -148,21 +172,23 @@ describe('Google API client helpers', () => {
     }, '[PromptGod] Google request attempts exhausted; surfacing failure for provider fallback')
   })
 
-  it('uses Gemma-compatible request shape without systemInstruction', async () => {
+  it('uses documented Gemma 4 request shape with systemInstruction', async () => {
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
       candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Rewritten prompt' }] } }],
     }), { status: 200 }))
 
-    await callGoogleAPI('AIzaTestKey', 'system prompt', 'user prompt', 'gemma-3-27b-it')
+    await callGoogleAPI('AIzaTestKey', 'system prompt', 'user prompt', 'gemma-4-26b-a4b-it')
 
     const [, init] = mockFetch.mock.calls[0] as [string, RequestInit]
     const body = JSON.parse(String(init.body))
 
-    expect(body.systemInstruction).toBeUndefined()
+    expect(body.systemInstruction).toEqual({
+      parts: [{ text: 'system prompt' }],
+    })
     expect(body.contents).toEqual([
       {
         role: 'user',
-        parts: [{ text: 'Instruction:\nsystem prompt\n\nTask:\nuser prompt' }],
+        parts: [{ text: 'user prompt' }],
       },
     ])
   })
@@ -179,9 +205,69 @@ describe('Google API client helpers', () => {
       }],
     }), { status: 200 }))
 
-    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', 'user prompt', 'gemma-3-27b-it')
+    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', 'user prompt', 'gemma-4-26b-a4b-it')
 
     expect(text).toBe('Give me a focused roadmap to learn Java.\n[DIFF: roadmap structure, practical focus]')
+  })
+
+  it('strips Gemma checklist and draft leakage before the final rewritten prompt', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      candidates: [{
+        finishReason: 'STOP',
+        content: {
+          parts: [{
+            text: `* User wants to rewrite a prompt for ChatGPT.
+* Input prompt: "i also want to play around with the latest stuff like hermes agent and carrier ops etc etc jepa. can i rather build some sort of personal agent for me? as a resume project, something which does shit for me and helps me out"
+* Goal: Transform this rough, informal request into a strong, actionable prompt for an AI to provide a roadmap/guide.
+* Technologies mentioned: Hermes agent, Carrier Ops, JEPA (Joint Embedding Predictive Architecture).
+* Tone: Informal, enthusiastic, "do shit for me".
+* Deliverable: A plan/guide on how to build this.
+* Draft 1 (Too formal): Please provide a detailed guide on how to build a personal agent as a resume project.
+* Refining for "FULL" intensity and "practical roadmap" rule: The user wants to "play around" and "do shit".
+* Rewritten prompt only? Yes.
+* Tag? Yes.
+* No reasoning/analysis? Yes.
+* No first-person brief? Yes.
+* Preserve intent/tech? Yes.
+* No [NO_CHANGE]? Yes.
+Provide a practical, project-based roadmap for building a high-impact personal agent to serve as a standout resume project. The agent should be designed for actual utility, automating personal tasks and providing real-world assistance. Specifically, integrate and leverage Hermes agent, Carrier Ops, and JEPA. Break the guide down into architecture, phased implementation, required tools, and key technical challenges. Keep the approach practical, technical, and focused on buildable outcomes.
+[DIFF: practical roadmap, architecture, milestones]`,
+          }],
+        },
+      }],
+    }), { status: 200 }))
+
+    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', 'user prompt', 'gemma-4-26b-a4b-it')
+
+    expect(text).toBe('Provide a practical, project-based roadmap for building a high-impact personal agent to serve as a standout resume project. The agent should be designed for actual utility, automating personal tasks and providing real-world assistance. Specifically, integrate and leverage Hermes agent, Carrier Ops, and JEPA. Break the guide down into architecture, phased implementation, required tools, and key technical challenges. Keep the approach practical, technical, and focused on buildable outcomes.\n[DIFF: practical roadmap, architecture, milestones]')
+  })
+
+  it('strips Gemma checklist leakage when the final prompt is glued after the last Yes marker', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
+      candidates: [{
+        finishReason: 'STOP',
+        content: {
+          parts: [{
+            text: `* Conversation: Ongoing (message #2)
+* User's original prompt: "how to learn java"
+* Goal: Rewrite "how to learn java" into a stronger prompt for the AI.
+* Draft 1 (Too generic): Please provide a comprehensive guide on how to learn Java.
+* Draft 2 (Better): Create a practical, project-based roadmap for learning Java.
+* Rewritten prompt only? Yes.
+* Tag? Yes.
+* No explanation? Yes.
+* No first-person? Yes.
+* Preserve intent? Yes.
+* Broad learning prompt -> practical roadmap? Yes.Provide a practical, structured roadmap for learning Java. Focus on a project-based approach rather than just theory. Break the learning path into clear stages, identify the core concepts to master at each step, and suggest specific projects to build to validate understanding. Keep the guidance sharp, actionable, and free of fluff.
+[DIFF: roadmap, projects]`,
+          }],
+        },
+      }],
+    }), { status: 200 }))
+
+    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', 'user prompt', 'gemma-4-26b-a4b-it')
+
+    expect(text).toBe('Provide a practical, structured roadmap for learning Java. Focus on a project-based approach rather than just theory. Break the learning path into clear stages, identify the core concepts to master at each step, and suggest specific projects to build to validate understanding. Keep the guidance sharp, actionable, and free of fluff.\n[DIFF: roadmap, projects]')
   })
 
   it('falls back to a sharpened source prompt when Gemma softens a launch prompt into generic project-brief language', async () => {
@@ -203,7 +289,7 @@ describe('Google API client helpers', () => {
       }],
     }), { status: 200 }))
 
-    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', userMessage, 'gemma-3-27b-it')
+    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', userMessage, 'gemma-4-26b-a4b-it')
 
     expect(text).toBe(
       'Use the launch brief, meeting notes, a draft customer FAQ, and product screenshots as the source material to create actionable launch preparation materials. Specifically, identify the primary launch risks, any inconsistencies or contradictions within the provided documents, potential customer misunderstandings, and team assumptions that lack evidence. Then produce a practical launch readiness checklist, a concise internal risk memo, and a draft customer-facing FAQ that is clear and natural-sounding. If the files present conflicting information, please highlight these discrepancies directly. Avoid inventing missing details or masking uncertainty with vague language. Draft a clear summary I can share internally.\n[DIFF: refined wording, deliverables]'
@@ -225,7 +311,7 @@ describe('Google API client helpers', () => {
       }],
     }), { status: 200 }))
 
-    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', userMessage, 'gemma-3-27b-it')
+    const text = await callGoogleAPI('AIzaTestKey', 'system prompt', userMessage, 'gemma-4-26b-a4b-it')
 
     expect(text).toBe(
       'Use the launch brief, meeting notes, a draft customer FAQ, and product screenshots as the source material to create actionable launch preparation materials. Specifically, identify the primary launch risks, any inconsistencies or contradictions within the provided documents, potential customer misunderstandings, and team assumptions that lack evidence. Then produce a practical launch readiness checklist, a concise internal risk memo, and a draft customer-facing FAQ that is clear and natural-sounding. If the files present conflicting information, please highlight these discrepancies directly. Avoid inventing missing details or masking uncertainty with vague language. Draft a clear summary I can share internally.'

@@ -12,7 +12,7 @@ describe('rewrite-google policy modules', () => {
     expect(GOOGLE_NON_GEMMA_MODELS).toEqual(['gemini-2.5-flash', 'gemini-2.5-flash-lite'])
     expect(GOOGLE_PRIMARY_MODEL).toBe('gemini-2.5-flash')
     expect(isSupportedGoogleNonGemmaModel('gemini-2.5-flash')).toBe(true)
-    expect(isSupportedGoogleNonGemmaModel('gemma-3-27b-it')).toBe(false)
+    expect(isSupportedGoogleNonGemmaModel('gemma-4-26b-a4b-it')).toBe(false)
   })
 
   it('uses systemInstruction and disables thinking for Gemini rewrites', () => {
@@ -26,12 +26,12 @@ describe('rewrite-google policy modules', () => {
     })
   })
 
-  it('keeps Gemma on the legacy inline request shape', () => {
-    const body = buildGoogleRequestBody('gemma-3-27b-it', 'system', 'user', 512)
+  it('uses the documented Gemma 4 systemInstruction request shape', () => {
+    const body = buildGoogleRequestBody('gemma-4-26b-a4b-it', 'system', 'user', 512)
 
-    expect(body.systemInstruction).toBeUndefined()
+    expect(body.systemInstruction).toEqual({ parts: [{ text: 'system' }] })
     expect(body.contents).toEqual([
-      { role: 'user', parts: [{ text: 'Instruction:\nsystem\n\nTask:\nuser' }] },
+      { role: 'user', parts: [{ text: 'user' }] },
     ])
   })
 
@@ -49,6 +49,8 @@ describe('rewrite-google policy modules', () => {
     expect(classifyGoogleEscalation(new Error('[LLMClient] Google API returned 429: quota'))).toBe('rate-limit')
     expect(classifyGoogleEscalation(new Error('[LLMClient] Google API returned 502: bad gateway'))).toBe('server-error')
     expect(classifyGoogleEscalation(new Error('[LLMClient] Google API returned unusable output (truncated output)'))).toBe('unusable-output')
+    expect(classifyGoogleEscalation(new Error('[LLMClient] Google API returned unusable output (finish reason: MAX_TOKENS)'))).toBe('unusable-output')
+    expect(classifyGoogleEscalation(new Error('[LLMClient] Google API returned malformed JSON response'))).toBe('malformed-response')
     expect(classifyGoogleEscalation(new Error('[LLMClient] Google API returned 401: bad key'))).toBeNull()
   })
 })

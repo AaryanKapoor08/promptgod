@@ -1,16 +1,24 @@
-import { assertBudget } from '../rewrite-core/budget'
+import { assertBudget, measureTokens } from '../rewrite-core/budget'
 import type { ValidationIssue } from '../rewrite-core/types'
 
 const issueSeverityOrder = [
   'UNCHANGED_REWRITE',
+  'NEAR_ECHO_REWRITE',
   'ANSWERED_INSTEAD_OF_REWRITING',
   'DROPPED_DELIVERABLE',
   'DROPPED_PRESERVE_TOKEN',
+  'GENERIC_PROJECT_BRIEF',
   'FIRST_PERSON_BRIEF',
   'MERGED_SEPARATE_TASKS',
   'ASKED_FORBIDDEN_QUESTION',
   'DECORATIVE_MARKDOWN',
 ]
+
+export type LlmRetryPayloadBudget = {
+  productOwnedTokens: number
+  sourceTokens: number
+  totalTokens: number
+}
 
 export function buildLlmRetryUserMessage(sourceText: string, failedOutput: string, issues: ValidationIssue[]): string {
   const topIssues = [...issues]
@@ -26,9 +34,10 @@ Source:
 ${sourceText}
 """`
 
+  const budget = measureLlmRetryPayloadBudget(retryMessage, sourceText)
   assertBudget({
     kind: 'llm-retry',
-    tokens: estimateRetryProductOwnedTokens(retryMessage, sourceText),
+    tokens: budget.productOwnedTokens,
     hardCap: 220,
   })
 
@@ -48,7 +57,13 @@ function extractFailingSubstring(output: string, issue: ValidationIssue): string
   return match ? ` (${match[0].slice(0, 30)})` : ''
 }
 
-function estimateRetryProductOwnedTokens(message: string, sourceText: string): number {
-  return Math.max(0, Math.ceil(message.length / 4) - Math.ceil(sourceText.length / 4))
+export function measureLlmRetryPayloadBudget(message: string, sourceText: string): LlmRetryPayloadBudget {
+  const totalTokens = measureTokens(message)
+  const sourceTokens = measureTokens(sourceText)
+  return {
+    productOwnedTokens: Math.max(0, totalTokens - sourceTokens),
+    sourceTokens,
+    totalTokens,
+  }
 }
 

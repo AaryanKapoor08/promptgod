@@ -65,9 +65,11 @@ export type ValidationIssueCode =
   | 'ASKED_FORBIDDEN_QUESTION'
   | 'DECORATIVE_MARKDOWN'
   | 'FIRST_PERSON_BRIEF'
+  | 'GENERIC_PROJECT_BRIEF'
   | 'MERGED_SEPARATE_TASKS'
   | 'ANSWERED_INSTEAD_OF_REWRITING'
   | 'UNCHANGED_REWRITE'
+  | 'NEAR_ECHO_REWRITE'
 
 export type ValidationIssue = {
   code: ValidationIssueCode

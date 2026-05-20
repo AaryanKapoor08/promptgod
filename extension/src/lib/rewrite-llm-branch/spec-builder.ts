@@ -70,8 +70,10 @@ Contract:
 - Ask clarifying questions only inside the rewritten prompt when critical context is missing and guessing would be required. Never ask the user directly.
 - If the prompt is broad business/app strategy without enough concrete context, tell the next AI to ask up to 3 concise clarifying questions first, then proceed.
 - Do not invent facts, numbers, names, dates, stack details, budgets, audiences, causes, or evidence.
+- Preserve unfamiliar terms, model names, project names, and shorthand literally; do not expand, pluralize, rename, or sanitize terms like "carrier ops", "Hermes agent", or "JEPA" unless the source defines them.
 - Do not use placeholders or fill-in templates.
 - Do not rewrite into first-person brief framing like "My goal is", "Here's what I need you to do", or "Deliverables include".
+- For personal/resume-project/agent-builder prompts, keep the rewrite as a concrete build/research prompt for a useful project, not a generic feasibility brief.
 - For incident, support, debugging, ops, and launch triage, keep direct operational wording: sort evidence, separate facts from guesses, rank likely paths, preserve team updates and risk callouts.
 - Use plain text unless the source explicitly asks for a format.`
 }

@@ -4,7 +4,7 @@
 
 import type { ConversationContext } from '../content/adapters/types'
 import { detectProviderFromApiKey, type Provider } from './provider-policy'
-import { GOOGLE_PRIMARY_MODEL, isGoogleGemmaModel, normalizeGoogleModelName } from './rewrite-google/models'
+import { GOOGLE_GEMMA_FALLBACK_MODEL, GOOGLE_PRIMARY_MODEL, isGoogleGemmaModel, normalizeGoogleModelName } from './rewrite-google/models'
 import { OPENROUTER_PRIMARY_FREE_MODEL } from './rewrite-openrouter/curation'
 import { buildGoogleRequestBody, GOOGLE_REWRITE_TEMPERATURE } from './rewrite-google/request-policy'
 import {
@@ -61,13 +61,25 @@ const GOOGLE_BLOCKING_FINISH_REASONS = new Set([
   'RECITATION',
 ])
 
+const GOOGLE_UNUSABLE_FINISH_REASONS = new Set([
+  ...GOOGLE_BLOCKING_FINISH_REASONS,
+  'FINISH_REASON_UNSPECIFIED',
+  'MAX_TOKENS',
+  'MALFORMED_FUNCTION_CALL',
+  'OTHER',
+])
+
 const GOOGLE_MODEL_ALIASES: Record<string, string> = {
-  'gemma-4': 'gemma-3-27b-it',
-  'gemma-4-it': 'gemma-3-27b-it',
-  'gemma-4-31b': 'gemma-3-27b-it',
-  'gemma-4-31b-it': 'gemma-3-27b-it',
-  'gemma-4-26b-a4b': 'gemma-3-27b-it',
-  'gemma-4-26b-a4b-it': 'gemma-3-27b-it',
+  'gemma-3-27b-it': GOOGLE_GEMMA_FALLBACK_MODEL,
+  'gemma-4': GOOGLE_GEMMA_FALLBACK_MODEL,
+  'gemma-4-it': GOOGLE_GEMMA_FALLBACK_MODEL,
+  'gemma-4-31b': GOOGLE_GEMMA_FALLBACK_MODEL,
+  'gemma-4-31b-it': GOOGLE_GEMMA_FALLBACK_MODEL,
+  'gemma-4-26b-a4b': GOOGLE_GEMMA_FALLBACK_MODEL,
+}
+
+type GoogleCallOptions = {
+  perAttemptTimeoutMs?: number
 }
 
 function normalizeGoogleModelForRequest(model: string | undefined): string {
@@ -89,7 +101,9 @@ function sanitizeGemmaResponse(text: string, sourceText: string = ''): string {
   const diffTag = [...withoutFences.matchAll(/\[DIFF:\s*([^\]]*)\]/gi)]
     .map((match) => match[0].trim())
     .pop() ?? null
-  const bodyWithoutDiff = withoutFences.replace(/\[DIFF:[\s\S]*?\]/gi, '').trim()
+  const bodyWithoutDiff = stripGemmaAnalysisLeakage(
+    withoutFences.replace(/\[DIFF:[\s\S]*?\]/gi, '').trim()
+  )
 
   const cleanedLines = bodyWithoutDiff
     .split(/\r?\n/)
@@ -128,6 +142,63 @@ function sanitizeGemmaResponse(text: string, sourceText: string = ''): string {
   }
 
   return diffTag ? `${promptText}\n${diffTag}` : promptText
+}
+
+function stripGemmaAnalysisLeakage(text: string): string {
+  const finalAfterChecklist = extractGemmaFinalAfterChecklist(text)
+  if (finalAfterChecklist) {
+    return finalAfterChecklist
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  if (lines.length < 4) {
+    return text
+  }
+
+  const analysisIndexes = lines
+    .map((line, index) => isGemmaAnalysisLeakLine(line) ? index : -1)
+    .filter((index) => index >= 0)
+
+  if (analysisIndexes.length < 3) {
+    return text
+  }
+
+  const tail = lines.slice(Math.max(...analysisIndexes) + 1).join('\n').trim()
+  if (tail) {
+    return tail
+  }
+
+  return lines
+    .filter((line) => !isGemmaAnalysisLeakLine(line) && !/^\*\s+/.test(line))
+    .join('\n')
+    .trim()
+}
+
+function isGemmaAnalysisLeakLine(line: string): boolean {
+  return /^(?:[*-]\s*)?(?:User wants|Input prompt|Goal|Technologies mentioned|Tone|Deliverable|The original|It needs|Must keep|Draft\s+\d+|Refining for|Rewritten prompt only\?|Tag\?|No reasoning\/analysis\?|No first-person brief\?|Preserve intent\/tech\?|No \[NO_CHANGE\]\?)(?::|\s|$)/i.test(line)
+}
+
+function extractGemmaFinalAfterChecklist(text: string): string {
+  const markers = [...text.matchAll(/(?:^|\n)\s*\*\s*[^\n]{0,180}\?\s*Yes\.\s*/gi)]
+  if (markers.length === 0) {
+    return ''
+  }
+
+  const last = markers[markers.length - 1]
+  const start = (last.index ?? 0) + last[0].length
+  const tail = text.slice(start).trim()
+  if (!tail) {
+    return ''
+  }
+
+  return tail
+    .replace(/^\*+\s*/, '')
+    .replace(/^(?:[^\n]{0,220}\?\s*Yes\.\s*)+/i, '')
+    .trim()
 }
 
 function extractRewriteSourceText(userMessage: string): string {
@@ -637,8 +708,8 @@ function extractGoogleOutputIssue(payload: unknown, text: string): string | null
   }
 
   const reasons = extractGoogleFinishReasons(response)
-  const hasBlockingReason = reasons.some((reason) => GOOGLE_BLOCKING_FINISH_REASONS.has(reason.toUpperCase()))
-  if (hasBlockingReason) {
+  const hasUnusableReason = reasons.some((reason) => GOOGLE_UNUSABLE_FINISH_REASONS.has(reason.toUpperCase()))
+  if (hasUnusableReason) {
     return `finish reason: ${reasons.join(', ')}`
   }
 
@@ -693,7 +764,8 @@ export async function callGoogleAPI(
   systemPrompt: string,
   userMessage: string,
   model: string = GOOGLE_PRIMARY_MODEL,
-  maxTokens: number = 512
+  maxTokens: number = 512,
+  options: GoogleCallOptions = {}
 ): Promise<string> {
   const deadline = Date.now() + GOOGLE_TOTAL_REQUEST_BUDGET_MS
   const modelsToTry = buildGoogleModelChain(model)
@@ -707,7 +779,10 @@ export async function callGoogleAPI(
         throw new Error('[LLMClient] Google API overall request budget exceeded')
       }
 
-      const attemptTimeoutMs = Math.min(REQUEST_TIMEOUT_MS.google, remainingBudgetMs)
+      const attemptTimeoutMs = Math.min(
+        options.perAttemptTimeoutMs ?? REQUEST_TIMEOUT_MS.google,
+        remainingBudgetMs
+      )
 
       const response = await fetchWithTimeout(
         `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelToTry)}:generateContent`,
@@ -739,7 +814,7 @@ export async function callGoogleAPI(
         break
       }
 
-      const payload = await response.json()
+      const payload = await parseGoogleJsonResponse(response)
       const rawText = extractGoogleText(payload)
       const text = isGoogleGemmaModel(modelToTry)
         ? sanitizeGemmaResponse(rawText, extractRewriteSourceText(userMessage))
@@ -781,6 +856,16 @@ export async function callGoogleAPI(
   }
 
   throw lastError ?? new Error('[LLMClient] Google API request failed')
+}
+
+async function parseGoogleJsonResponse(response: Response): Promise<unknown> {
+  try {
+    return await response.json()
+  } catch (error) {
+    throw new Error('[LLMClient] Google API returned malformed JSON response', {
+      cause: error instanceof Error ? error : undefined,
+    })
+  }
 }
 
 const GOOGLE_SERVER_RETRY_DELAY_MIN_MS = 300

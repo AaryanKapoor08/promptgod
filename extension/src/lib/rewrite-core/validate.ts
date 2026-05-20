@@ -1,7 +1,5 @@
 import type { ConstraintSet, ValidationIssue, ValidationIssueCode, ValidationResult, RewriteBranch } from './types'
 
-const ENABLE_LLM_PRESERVE_TOKEN_VALIDATION = false
-
 export type ValidateRewriteInput = {
   branch: RewriteBranch
   sourceText: string
@@ -15,6 +13,7 @@ export function validateRewrite(input: ValidateRewriteInput): ValidationResult {
 
   addIf(issues, detectsDecorativeMarkdown(output), 'DECORATIVE_MARKDOWN', 'Output contains decorative markdown.')
   addIf(issues, detectsFirstPersonBrief(output), 'FIRST_PERSON_BRIEF', 'Output uses first-person prompt-brief framing.')
+  addIf(issues, detectsGenericProjectBriefDrift(input.sourceText, output), 'GENERIC_PROJECT_BRIEF', 'Output weakens a concrete project-building prompt into a generic feasibility brief.')
   addIf(
     issues,
     asksForbiddenQuestion(output, input.branch, input.constraints),
@@ -35,11 +34,17 @@ export function validateRewrite(input: ValidateRewriteInput): ValidationResult {
   )
   addIf(
     issues,
+    input.branch === 'LLM' && isNearEchoRewrite(input.sourceText, output),
+    'NEAR_ECHO_REWRITE',
+    'Output is a near-echo of the source prompt.'
+  )
+  addIf(
+    issues,
     dropsDeliverable(input.sourceText, output),
     'DROPPED_DELIVERABLE',
     'Output dropped an explicit deliverable from the source.'
   )
-  if (ENABLE_LLM_PRESERVE_TOKEN_VALIDATION && input.branch === 'LLM') {
+  if (input.branch === 'LLM') {
     issues.push(...droppedPreserveTokenIssues(output, input.constraints))
   }
   addIf(
@@ -67,6 +72,26 @@ function detectsDecorativeMarkdown(text: string): boolean {
 
 function detectsFirstPersonBrief(text: string): boolean {
   return /^(?:my goal is|my primary need is|here'?s what i need you to do|this prompt should|i am providing|i'm providing|i’m providing)\b/i.test(text.trim())
+}
+
+function detectsGenericProjectBriefDrift(sourceText: string, output: string): boolean {
+  if (/\b(?:feasibility|feasible)\b/i.test(sourceText)) {
+    return false
+  }
+
+  const sourceLooksLikePersonalProject =
+    /\b(?:personal agent|agent for me|resume project|portfolio project|build(?:ing)? (?:some sort of )?(?:a )?personal|does .{0,20} for me|helps? me out)\b/i.test(sourceText)
+    && /\b(?:build|create|make|prototype|project|agent)\b/i.test(sourceText)
+
+  if (!sourceLooksLikePersonalProject) {
+    return false
+  }
+
+  return /^(?:explore|assess|evaluate)\s+the\s+feasibility\s+of\s+building\b/i.test(output.trim())
+    || /^(?:explore|assess|evaluate)\s+building\s+(?:a\s+)?personal\s+ai\s+agent\b/i.test(output.trim())
+    || /\bconsider incorporating advanced concepts\b/i.test(output)
+    || /\b(?:functional|self-directed)\s+(?:project|agent|system)\b[^.]{0,120}\bdemonstrates?\s+practical\s+application\b/i.test(output)
+    || /\bgoal is to create a system that performs useful tasks and provides assistance tailored to personal needs\b/i.test(output)
 }
 
 function asksForbiddenQuestion(text: string, branch: RewriteBranch, constraints?: ConstraintSet): boolean {
@@ -102,6 +127,27 @@ function isUnchangedRewrite(sourceText: string, output: string): boolean {
   const normalizedSource = normalizeForCompare(sourceText)
   const normalizedOutput = normalizeForCompare(output)
   return normalizedSource.length > 80 && normalizedSource === normalizedOutput
+}
+
+function isNearEchoRewrite(sourceText: string, output: string): boolean {
+  const sourceWords = normalizedWords(sourceText)
+  const outputWords = normalizedWords(output)
+  if (sourceWords.length < 20 || outputWords.length < 20) {
+    return false
+  }
+
+  const normalizedSource = sourceWords.join(' ')
+  const normalizedOutput = outputWords.join(' ')
+  if (normalizedSource === normalizedOutput) {
+    return false
+  }
+
+  const lengthRatio = outputWords.length / sourceWords.length
+  if (lengthRatio < 0.8 || lengthRatio > 1.2) {
+    return false
+  }
+
+  return tokenSimilarity(sourceWords, outputWords) >= 0.9
 }
 
 function droppedPreserveTokenIssues(output: string, constraints?: ConstraintSet): ValidationIssue[] {
@@ -181,6 +227,42 @@ function extractDeliverables(text: string): string[] {
 
 function normalizeForCompare(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+function normalizedWords(text: string): string[] {
+  const normalized = normalizeForCompare(text)
+  return normalized ? normalized.split(/\s+/) : []
+}
+
+function tokenSimilarity(a: string[], b: string[]): number {
+  const maxLength = Math.max(a.length, b.length)
+  if (maxLength === 0) {
+    return 1
+  }
+  return 1 - levenshteinDistance(a, b) / maxLength
+}
+
+function levenshteinDistance(a: string[], b: string[]): number {
+  const previous = Array.from({ length: b.length + 1 }, (_, index) => index)
+  const current = new Array<number>(b.length + 1)
+
+  for (let i = 1; i <= a.length; i += 1) {
+    current[0] = i
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1
+      current[j] = Math.min(
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + substitutionCost
+      )
+    }
+
+    for (let j = 0; j <= b.length; j += 1) {
+      previous[j] = current[j]
+    }
+  }
+
+  return previous[b.length]
 }
 
 const stopWords = new Set([

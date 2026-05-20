@@ -3,7 +3,7 @@ import { measureTokens } from '../../src/lib/rewrite-core/budget'
 import type { ValidationIssue } from '../../src/lib/rewrite-core/types'
 import { repairRewrite } from '../../src/lib/rewrite-core/repair'
 import { buildLlmBranchSpec } from '../../src/lib/rewrite-llm-branch/spec-builder'
-import { buildLlmRetryUserMessage } from '../../src/lib/rewrite-llm-branch/retry'
+import { buildLlmRetryUserMessage, measureLlmRetryPayloadBudget } from '../../src/lib/rewrite-llm-branch/retry'
 import { validateLlmBranchRewrite } from '../../src/lib/rewrite-llm-branch/validator'
 
 const analyticsDecisionPrompt = `I need help with a technical decision, but do not jump straight into a confident recommendation.
@@ -38,7 +38,11 @@ describe('LLM branch compact pipeline pieces', () => {
     const validation = validateLlmBranchRewrite(source, failed)
     const retry = buildLlmRetryUserMessage(source, failed, validation.issues)
 
-    expect(measureTokens(retry) - measureTokens(source)).toBeLessThan(220)
+    const budget = measureLlmRetryPayloadBudget(retry, source)
+
+    expect(budget.productOwnedTokens).toBeLessThan(220)
+    expect(budget.totalTokens).toBe(measureTokens(retry))
+    expect(budget.sourceTokens).toBe(measureTokens(source))
     expect(retry).toContain('Retry the rewrite only')
     expect(retry).toContain('FIRST_PERSON_BRIEF')
   })
@@ -50,6 +54,41 @@ describe('LLM branch compact pipeline pieces', () => {
     )
 
     expect(result.ok).toBe(false)
+  })
+
+  it('rejects Flash Lite style feasibility drift for personal-agent resume projects', () => {
+    const source = 'i also want to play around with the latest stuff like hermes agent and carrier ops etc etc jepa. can i rather build some sort of personal agent for me? as a resume project, something which does shit for me and helps me out'
+    const output = 'Explore the feasibility of building a personal agent as a resume project. This agent should automate tasks and provide assistance. Consider incorporating advanced concepts such as Hermes agents, carrier operations, and JEPA (Joint Embedding Predictive Architectures). The goal is to create a functional project that demonstrates practical application of these technologies.'
+
+    const result = validateLlmBranchRewrite(source, output)
+
+    expect(result.ok).toBe(false)
+    expect(result.issues.map((issue) => issue.code)).toContain('GENERIC_PROJECT_BRIEF')
+  })
+
+  it('rejects Nemotron Super style generic personal-agent project drift', () => {
+    const source = 'i also want to play around with the latest stuff like hermes agent and carrier ops etc etc jepa. can i rather build some sort of personal agent for me? as a resume project, something which does shit for me and helps me out'
+    const output = 'Explore building a personal AI agent using recent technologies such as Hermes Agent, Carrier Ops, and JEPA as a resume project. The goal is to create a system that performs useful tasks and provides assistance tailored to personal needs. Focus on integrating these tools to develop a functional, self-directed agent that demonstrates practical application of current AI advancements. Prioritize hands-on experimentation and tangible outcomes that showcase skill in agent design, automation, and real-world utility.'
+
+    const result = validateLlmBranchRewrite(source, output)
+
+    expect(result.ok).toBe(false)
+    expect(result.issues.map((issue) => issue.code)).toContain('GENERIC_PROJECT_BRIEF')
+  })
+
+  it('keeps the LLM contract explicit about literal emerging-tech terms', () => {
+    const built = buildLlmBranchSpec({
+      sourceText: 'build a personal agent resume project using hermes agent, carrier ops, and jepa ideas',
+      provider: 'Google',
+      modelId: 'gemini-2.5-flash-lite',
+      platform: 'chatgpt',
+      isNewConversation: true,
+      conversationLength: 0,
+    })
+
+    expect(built.systemPrompt).toContain('Preserve unfamiliar terms')
+    expect(built.systemPrompt).toContain('carrier ops')
+    expect(built.systemPrompt).toContain('not a generic feasibility brief')
   })
 
   it('keeps mechanical prompt style as a soft quality concern, not a hard validation failure', () => {
@@ -82,10 +121,11 @@ Use the available evidence to separate confirmed facts from guesses. Provide ord
     expect(validateLlmBranchRewrite(source, repaired).ok).toBe(true)
   })
 
-  it('does not retry valid paraphrases for preserve-token compression while the runtime gate is disabled', () => {
+  it('rejects preserve-token compression so runtime can retry or fall back', () => {
     const validation = validateLlmBranchRewrite(analyticsDecisionPrompt, compressedFlashRewrite)
 
-    expect(validation.ok).toBe(true)
+    expect(validation.ok).toBe(false)
+    expect(validation.issues.map((issue) => issue.code)).toContain('DROPPED_PRESERVE_TOKEN')
   })
 
   it('keeps retry payload within the budget when many DROPPED_PRESERVE_TOKEN issues fire', () => {
