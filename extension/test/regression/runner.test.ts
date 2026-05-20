@@ -2,6 +2,14 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { extractConstraints } from '../../src/lib/rewrite-core/constraints'
+import { repairRewrite } from '../../src/lib/rewrite-core/repair'
+import { buildLlmBranchSpec } from '../../src/lib/rewrite-llm-branch/spec-builder'
+import { validateLlmBranchRewrite } from '../../src/lib/rewrite-llm-branch/validator'
+import { getOpenRouterFreeChainOptions } from '../../src/popup/model-options'
+import { repairTextBranchRewrite } from '../../src/lib/rewrite-text-branch/repair'
+import { buildTextBranchSpec } from '../../src/lib/rewrite-text-branch/spec-builder'
+import { validateTextBranchRewrite } from '../../src/lib/rewrite-text-branch/validator'
 
 type Branch = 'LLM' | 'Text'
 type Provider = 'Google' | 'OpenRouter'
@@ -50,6 +58,11 @@ const skippedGemmaTargets = [
 ] as const
 
 const entriesDir = fileURLToPath(new URL('./entries/', import.meta.url))
+
+type LocalEvaluation = {
+  passed: boolean
+  errors: string[]
+}
 
 function loadEntries(): RegressionEntry[] {
   return readdirSync(entriesDir)
@@ -101,16 +114,138 @@ function validateEntry(entry: RegressionEntry): string[] {
   return errors
 }
 
-function evaluateEntryForTarget(entry: RegressionEntry, target: { branch: Branch; provider: Provider }): boolean | null {
+function evaluateEntryForTarget(entry: RegressionEntry, target: { branch: Branch; provider: Provider }): LocalEvaluation | null {
   if (entry.branch !== target.branch) {
     return null
   }
 
-  return validateEntry(entry).length === 0
+  const errors = [
+    ...validateEntry(entry),
+    ...evaluateLocalPipelineContract(entry, target),
+  ]
+
+  return {
+    passed: errors.length === 0,
+    errors,
+  }
 }
 
 function formatTarget(target: { branch: Branch; provider: Provider }): string {
   return `${target.branch} + ${target.provider}`
+}
+
+function evaluateLocalPipelineContract(entry: RegressionEntry, target: { branch: Branch; provider: Provider }): string[] {
+  const errors: string[] = []
+  const provider = target.provider
+
+  const built = entry.branch === 'LLM'
+    ? buildLlmBranchSpec({
+      sourceText: entry.source,
+      provider,
+      modelId: provider === 'Google' ? 'gemini-2.5-flash' : 'nvidia/nemotron-3-super-120b-a12b:free',
+      platform: 'chatgpt',
+      isNewConversation: true,
+      conversationLength: 0,
+    })
+    : buildTextBranchSpec({
+      sourceText: entry.source,
+      provider,
+      modelId: provider === 'Google' ? 'gemini-2.5-flash' : 'nvidia/nemotron-3-super-120b-a12b:free',
+    })
+
+  if (!built.systemPrompt.includes('Output only')) {
+    errors.push('production spec must keep output-only contract')
+  }
+  if (!built.userMessage.includes(entry.source.trim())) {
+    errors.push('production user message must carry the corpus source')
+  }
+  if (provider === 'OpenRouter' && getOpenRouterFreeChainOptions().some((model) => model.value === 'openrouter/free')) {
+    errors.push('OpenRouter runtime projection must not include openrouter/free')
+  }
+
+  const constraints = extractConstraints(entry.source)
+  for (const expectedCode of entry.expected_violation_codes) {
+    if (!expectationCoveredByLocalGate(entry, expectedCode, built.systemPrompt, constraints)) {
+      errors.push(`${expectedCode} is not covered by local validator, repair, or production contract`)
+    }
+  }
+
+  return errors
+}
+
+function expectationCoveredByLocalGate(
+  entry: RegressionEntry,
+  code: string,
+  systemPrompt: string,
+  constraints: ReturnType<typeof extractConstraints>
+): boolean {
+  const source = entry.source
+  const validate = (output: string): string[] => {
+    const result = entry.branch === 'LLM'
+      ? validateLlmBranchRewrite(source, output)
+      : validateTextBranchRewrite(source, output)
+    return result.issues.map((issue) => issue.code)
+  }
+
+  switch (code) {
+    case 'DECORATIVE_MARKDOWN':
+      return validate('**Rewritten prompt**\n\nUse the source material clearly.').includes('DECORATIVE_MARKDOWN')
+
+    case 'FIRST_PERSON_BRIEF':
+      return validate('My goal is to turn this into a clear project brief.').includes('FIRST_PERSON_BRIEF')
+
+    case 'ANSWERED_INSTEAD_OF_REWRITING':
+      return validate('The complaints suggest three root causes and two urgent fixes.').includes('ANSWERED_INSTEAD_OF_REWRITING') ||
+        /do not answer/i.test(systemPrompt)
+
+    case 'ASKED_FORBIDDEN_QUESTION':
+    case 'UNNECESSARY_CLARIFYING_QUESTION':
+      return entry.branch === 'Text'
+        ? validate('Who is the recipient?').includes('ASKED_FORBIDDEN_QUESTION')
+        : /Ask clarifying questions only/i.test(systemPrompt)
+
+    case 'DROPPED_DELIVERABLE':
+      return validate('Rewrite the source clearly.').includes('DROPPED_DELIVERABLE') ||
+        /Preserve[^.\n]+deliverables/i.test(systemPrompt)
+
+    case 'MERGED_SEPARATE_TASKS':
+    case 'STAGED_WORKFLOW_COLLAPSE':
+      return validate('Summarize the source and draft the response in one combined pass.').includes('MERGED_SEPARATE_TASKS') ||
+        /Preserve staged workflows exactly|one consolidated rewrite/i.test(systemPrompt)
+
+    case 'PLACEHOLDER_LEAK':
+    case 'TEMPLATE_OUTPUT':
+      return validate('Write a polite update to [recipient] about [project] by [date].').includes('DROPPED_DELIVERABLE')
+
+    case 'SOURCE_ECHO':
+      return entry.branch === 'Text'
+        ? validate(`Rewrite this clearly.\n\nOriginal text: ${source}`).includes('ANSWERED_INSTEAD_OF_REWRITING')
+        : validate(source).includes('UNCHANGED_REWRITE') || repairRewrite({ sourceText: source, output: `Rewrite this clearly.\n\nOriginal text: ${source}` }).changed
+
+    case 'DUPLICATE_SUMMARY': {
+      const duplicated = 'Analyze the notes and draft a team update.\n\nAnalyze the notes and draft a team update.'
+      const repaired = entry.branch === 'Text'
+        ? repairTextBranchRewrite(source, duplicated)
+        : repairRewrite({ sourceText: source, output: duplicated }).output
+      return repaired === 'Analyze the notes and draft a team update.'
+    }
+
+    case 'DEBUG_TAG_LEAK':
+      return !repairRewrite({ sourceText: source, output: 'Use the source clearly.\n[DIFF: debug]' }).output.includes('[DIFF:')
+
+    case 'INVENTED_DETAIL':
+      return constraints.constraints.some((constraint) => constraint.kind === 'no-invention') ||
+        /Do not invent facts/i.test(systemPrompt)
+
+    case 'GENERIC_SOFTENING':
+      return /Preserve the user's intent/i.test(systemPrompt) ||
+        validate('My goal is to explore this topic in a generic way.').some((issue) =>
+          issue === 'FIRST_PERSON_BRIEF' || issue === 'GENERIC_PROJECT_BRIEF'
+        )
+
+    default:
+      return false
+  }
 }
 
 describe('regression corpus schema', () => {
@@ -161,15 +296,22 @@ describe('regression corpus target runner', () => {
   it('reports per-branch and per-provider pass rates and enforces thresholds', () => {
     const report = runTargets.map((target) => {
       const applicable = entries.filter((entry) => entry.branch === target.branch)
-      const passed = applicable.filter((entry) => evaluateEntryForTarget(entry, target) === true)
+      const evaluated = applicable.map((entry) => ({
+        entry,
+        result: evaluateEntryForTarget(entry, target),
+      }))
+      const passed = evaluated.filter(({ result }) => result?.passed === true).map(({ entry }) => entry)
       const bySeverity = {
         'regression-must-not-recur': applicable.filter((entry) => entry.severity === 'regression-must-not-recur'),
         'quality-target': applicable.filter((entry) => entry.severity === 'quality-target'),
       }
       const passedBySeverity = {
-        'regression-must-not-recur': bySeverity['regression-must-not-recur'].filter((entry) => evaluateEntryForTarget(entry, target) === true),
-        'quality-target': bySeverity['quality-target'].filter((entry) => evaluateEntryForTarget(entry, target) === true),
+        'regression-must-not-recur': bySeverity['regression-must-not-recur'].filter((entry) => evaluateEntryForTarget(entry, target)?.passed === true),
+        'quality-target': bySeverity['quality-target'].filter((entry) => evaluateEntryForTarget(entry, target)?.passed === true),
       }
+      const failures = evaluated
+        .filter(({ result }) => result && !result.passed)
+        .map(({ entry, result }) => `${entry.id}: ${result?.errors.join('; ')}`)
       const regressionRate =
         bySeverity['regression-must-not-recur'].length === 0
           ? 1
@@ -186,6 +328,7 @@ describe('regression corpus target runner', () => {
         passRate: passed.length / applicable.length,
         regressionRate,
         qualityRate,
+        failures,
       }
     })
 
@@ -196,6 +339,7 @@ describe('regression corpus target runner', () => {
         )}%; quality=${Math.round(row.qualityRate * 100)}%`
       )
       expect(row.total, `${row.target} has no applicable corpus entries`).toBeGreaterThan(0)
+      expect(row.failures, `${row.target} local pipeline contract failures`).toEqual([])
       expect(row.regressionRate, `${row.target} regression-must-not-recur rate`).toBe(1)
       expect(row.qualityRate, `${row.target} quality-target rate`).toBeGreaterThanOrEqual(0.9)
     }

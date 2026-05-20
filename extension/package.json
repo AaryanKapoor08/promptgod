@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && vitest run",
     "test:watch": "vitest",
     "eval:openrouter": "vitest run test/regression/openrouter-primary-eval.test.ts"
   },
