@@ -10,7 +10,7 @@ The project is intentionally engineered like a prompt compiler, not a prompt tem
 
 - Enhances prompts directly inside ChatGPT, Claude.ai, Gemini, and Perplexity.
 - Rewrites selected text from any supported page through the right-click Text branch.
-- Supports bring-your-own-key flows for Google, OpenRouter, OpenAI, and Anthropic APIs.
+- Supports bring-your-own-key flows for Google and OpenRouter APIs.
 - Preserves hard constraints such as "plain text only", "do not solve yet", "ask questions first", word limits, staged workflows, deliverables, and anti-invention rules.
 - Avoids common AI rewrite failures: source echo, vague project-brief drift, fake answers, decorative markdown, merged tasks, dropped deliverables, and duplicate summary tails.
 - Uses a curated provider fallback chain instead of blindly trusting one model.
@@ -58,7 +58,7 @@ extension/src/
   popup/
     popup UI, model selection, account status, curated chain display
 
-  service-worker.ts        Routing, provider fallback, streaming orchestration
+  service-worker.ts        Routing, provider fallback, final-output orchestration
 ```
 
 The important split is deliberate:
@@ -115,7 +115,7 @@ PromptGod uses a small set of practical algorithms around the model call:
 - **Whitespace and source-mode normalization** to stabilize messy input.
 - **Regex and keyword constraint extraction** with a precision-first stance.
 - **Issue-code validation** for dropped deliverables, forbidden questions, markdown drift, first-person brief framing, task merging, and answer-instead-of-rewrite failures.
-- **Near-echo detection** for OpenRouter outputs that barely change the source.
+- **Near-echo detection** for provider outputs that barely change the source.
 - **Wrapper rejection** for system-prompt-shaped outputs like "You are an AI assistant..."
 - **Reasoning-channel suppression** for OpenRouter reasoning models that would otherwise burn tokens before producing visible text.
 - **Deterministic repair** for cosmetic and structural failures.
@@ -161,6 +161,8 @@ npm install
 npm run build
 npm test
 ```
+
+`npm test` runs TypeScript typecheck first, then the Vitest suite.
 
 Useful scripts:
 
