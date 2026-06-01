@@ -1,0 +1,9 @@
+{
+  "id": "llm-constraint-heavy-cover-letter",
+  "branch": "LLM",
+  "source": "Write a cover letter for a junior data analyst role. Plain text only, no markdown, under 180 words, no corporate buzzwords, and do not invent any experience I did not give you.",
+  "expected_violation_codes": ["INVENTED_DETAIL", "PLACEHOLDER_LEAK", "GENERIC_SOFTENING"],
+  "expected_preserved_constraints": ["plain text only, no markdown", "under 180 words", "no corporate buzzwords", "do not invent experience"],
+  "severity": "regression-must-not-recur",
+  "notes": "Constraint-heavy input must carry every hard constraint through literally instead of compressing them into vague phrasing."
+}
