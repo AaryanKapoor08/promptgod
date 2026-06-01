@@ -1,0 +1,9 @@
+{
+  "id": "text-thin-prompt-expand",
+  "branch": "Text",
+  "source": "help me write a prompt to get good at sql",
+  "expected_violation_codes": ["ANSWERED_INSTEAD_OF_REWRITING", "DROPPED_DELIVERABLE"],
+  "expected_preserved_constraints": ["expand into a specific actionable instruction", "no invented scope, level, or audience", "stay an instruction, not an answer"],
+  "severity": "quality-target",
+  "notes": "Thin prompt-like selection should be sharpened into a concrete instruction without inventing context."
+}
