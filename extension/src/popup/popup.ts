@@ -55,8 +55,11 @@ function getSelectableProviderName(provider: Provider): string {
 function normalizeModelId(model: string | undefined): string | undefined {
   if (!model) return model
 
-  if (model === 'nvidia/nemotron-nano-30b-a3b:free') {
-    return 'nvidia/nemotron-3-nano-30b-a3b:free'
+  if (
+    model === 'nvidia/nemotron-nano-30b-a3b:free'
+    || model === 'nvidia/nemotron-3-nano-30b-a3b:free'
+  ) {
+    return 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
   }
 
   if (
