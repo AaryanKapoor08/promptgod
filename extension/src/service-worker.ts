@@ -25,7 +25,7 @@ import { buildLlmRetryUserMessage } from './lib/rewrite-llm-branch/retry'
 import { validateLlmBranchRewrite } from './lib/rewrite-llm-branch/validator'
 import { buildTextBranchSpec } from './lib/rewrite-text-branch/spec-builder'
 import { repairTextBranchRewrite } from './lib/rewrite-text-branch/repair'
-import { buildTextRetryUserMessage, shouldRetryTextBranch } from './lib/rewrite-text-branch/retry'
+import { buildTextRetryUserMessage } from './lib/rewrite-text-branch/retry'
 import { validateTextBranchRewrite } from './lib/rewrite-text-branch/validator'
 import { GOOGLE_GEMMA_FALLBACK_MODEL, GOOGLE_PRIMARY_MODEL, isGoogleGemmaModel } from './lib/rewrite-google/models'
 import { shouldEscalateGoogleToFallback } from './lib/rewrite-google/retry-policy'
@@ -1009,21 +1009,19 @@ async function runTextBranchPipeline({
     return firstFinal.text
   }
 
-  if (shouldRetryTextBranch(firstFinal.validation.issues)) {
-    const retryUserMessage = buildTextRetryUserMessage(selectedText, firstFinal.validation.issues)
-    const retryOutput = await collectContextEnhancementText({
-      apiKey,
-      provider,
-      model,
-      systemPrompt: built.systemPrompt,
-      userMessage: retryUserMessage,
-      promptWordCount,
-      signal,
-    })
-    const retryFinal = finalizeTextBranchCandidate(selectedText, retryOutput)
-    if (retryFinal.validation.ok) {
-      return retryFinal.text
-    }
+  const retryUserMessage = buildTextRetryUserMessage(selectedText, firstOutput, firstFinal.validation.issues)
+  const retryOutput = await collectContextEnhancementText({
+    apiKey,
+    provider,
+    model,
+    systemPrompt: built.systemPrompt,
+    userMessage: retryUserMessage,
+    promptWordCount,
+    signal,
+  })
+  const retryFinal = finalizeTextBranchCandidate(selectedText, retryOutput)
+  if (retryFinal.validation.ok) {
+    return retryFinal.text
   }
 
   if (escalateOnValidationFailure) {
