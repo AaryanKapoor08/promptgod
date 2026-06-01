@@ -1,0 +1,9 @@
+{
+  "id": "llm-vague-expand-system-design",
+  "branch": "LLM",
+  "source": "How do I get good at system design?",
+  "expected_violation_codes": ["GENERIC_SOFTENING", "INVENTED_DETAIL"],
+  "expected_preserved_constraints": ["keep the system design topic", "expand into a structured actionable prompt", "do not invent specifics the user did not give"],
+  "severity": "quality-target",
+  "notes": "Vague low-effort input must be expanded into a structured prompt, not reworded into a near-no-op. Guards the thin-input expansion behavior."
+}
