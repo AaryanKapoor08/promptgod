@@ -32,7 +32,7 @@ describe('rewrite-openrouter policy modules', () => {
   it('keeps the curated free chain in product order', () => {
     expect(OPENROUTER_CURATED_FREE_MODELS.map((model) => model.id)).toEqual([
       'nvidia/nemotron-3-super-120b-a12b:free',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
     ])
   })
 
@@ -54,12 +54,12 @@ describe('rewrite-openrouter policy modules', () => {
   it('demotes disappeared live models by filtering them from the runtime projection', () => {
     const chain = buildCuratedOpenRouterChain('inclusionai/ling-2.6-flash:free', [
       'nvidia/nemotron-3-super-120b-a12b:free',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
     ])
 
     expect(chain).toEqual([
       'nvidia/nemotron-3-super-120b-a12b:free',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
     ])
   })
 
