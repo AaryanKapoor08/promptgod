@@ -1,0 +1,9 @@
+{
+  "id": "llm-already-strong-code-reviewer",
+  "branch": "LLM",
+  "source": "Act as a senior code reviewer. Review the Python function I paste next for correctness bugs and security issues only. Do not comment on style. List each issue as file:line - problem - fix. If there are no issues, respond with no issues found.",
+  "expected_violation_codes": ["GENERIC_SOFTENING", "DROPPED_DELIVERABLE", "ANSWERED_INSTEAD_OF_REWRITING"],
+  "expected_preserved_constraints": ["keep close to the already-strong prompt", "preserve the file:line - problem - fix output format", "preserve the no issues found fallback"],
+  "severity": "quality-target",
+  "notes": "Already-strong prompt must get minimal-touch treatment: do not bloat, soften, or break its explicit output contract."
+}
