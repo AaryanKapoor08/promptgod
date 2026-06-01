@@ -24,6 +24,16 @@ export function isGoogleRetryableStatus(status: number): boolean {
   return status === 429 || (status >= 500 && status <= 599)
 }
 
+// A Google free-tier daily-cap 429 surfaces as RESOURCE_EXHAUSTED whose quota id
+// contains "PerDay" (e.g. GenerateRequestsPerDayPerProjectPerModel-FreeTier).
+// Retrying the same model cannot succeed and just burns another daily request,
+// so these should skip the same-model retry and go straight to provider fallback.
+// Per-minute 429s ("PerMinute") are genuinely transient and stay retryable.
+export function isGoogleDailyQuotaError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  return /per[\s-]?day/i.test(message)
+}
+
 export function classifyGoogleEscalation(error: unknown): GoogleEscalationReason | null {
   if (!(error instanceof Error)) return null
 
