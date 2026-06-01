@@ -9,6 +9,7 @@ import { OPENROUTER_PRIMARY_FREE_MODEL } from './rewrite-openrouter/curation'
 import { buildGoogleRequestBody, GOOGLE_REWRITE_TEMPERATURE } from './rewrite-google/request-policy'
 import {
   GOOGLE_MAX_ATTEMPTS_PER_MODEL,
+  isGoogleDailyQuotaError,
   isGoogleRetryableStatus,
   shouldRetryGoogleSameModel,
 } from './rewrite-google/retry-policy'
@@ -802,6 +803,16 @@ export async function callGoogleAPI(
         const error = new Error(`[LLMClient] Google API returned ${response.status}: ${errorBody}`, {
           cause: new Error(errorBody),
         })
+
+        if (response.status === 429 && isGoogleDailyQuotaError(errorBody)) {
+          lastError = error
+          console.info({
+            provider: 'google',
+            model: modelToTry,
+            status: response.status,
+          }, '[PromptGod] Google daily quota exhausted; skipping retry and surfacing for provider fallback')
+          break
+        }
 
         if (shouldRetryGoogleSameModel(response.status, attempt)) {
           lastError = error
