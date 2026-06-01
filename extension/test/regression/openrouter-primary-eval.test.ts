@@ -12,7 +12,7 @@ import { buildLlmRetryUserMessage } from '../../src/lib/rewrite-llm-branch/retry
 import { validateLlmBranchRewrite } from '../../src/lib/rewrite-llm-branch/validator'
 import { OPENROUTER_PRIMARY_FREE_MODEL } from '../../src/lib/rewrite-openrouter/curation'
 import { repairTextBranchRewrite } from '../../src/lib/rewrite-text-branch/repair'
-import { buildTextRetryUserMessage, shouldRetryTextBranch } from '../../src/lib/rewrite-text-branch/retry'
+import { buildTextRetryUserMessage } from '../../src/lib/rewrite-text-branch/retry'
 import { buildTextBranchSpec } from '../../src/lib/rewrite-text-branch/spec-builder'
 import { validateTextBranchRewrite } from '../../src/lib/rewrite-text-branch/validator'
 
@@ -108,9 +108,8 @@ async function evaluateTextEntry(key: string, entry: RegressionEntry): Promise<E
   )
   const first = finalizeText(entry.source, firstOutput)
   if (first.ok) return buildRow(entry, true, [])
-  if (!shouldRetryTextBranch(first.issues)) return buildRow(entry, false, first.issues)
 
-  const retryMessage = buildTextRetryUserMessage(entry.source, first.issues)
+  const retryMessage = buildTextRetryUserMessage(entry.source, firstOutput, first.issues)
   const retryOutput = await callPrimaryModel(
     key,
     built.systemPrompt,
