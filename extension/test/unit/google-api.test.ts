@@ -172,6 +172,29 @@ describe('Google API client helpers', () => {
     }, '[PromptGod] Google request attempts exhausted; surfacing failure for provider fallback')
   })
 
+  it('does not retry a daily-quota 429 and surfaces it after a single request', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const dailyQuotaBody = JSON.stringify({
+      error: {
+        code: 429,
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier' }] }],
+      },
+    })
+    mockFetch.mockResolvedValueOnce(new Response(dailyQuotaBody, { status: 429 }))
+
+    await expect(
+      callGoogleAPI('AIzaTestKey', 'system', 'user', 'gemini-2.5-flash')
+    ).rejects.toThrow('Google API returned 429')
+
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    expect(infoSpy).toHaveBeenCalledWith({
+      provider: 'google',
+      model: 'gemini-2.5-flash',
+      status: 429,
+    }, '[PromptGod] Google daily quota exhausted; skipping retry and surfacing for provider fallback')
+  })
+
   it('uses documented Gemma 4 request shape with systemInstruction', async () => {
     mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({
       candidates: [{ finishReason: 'STOP', content: { parts: [{ text: 'Rewritten prompt' }] } }],
