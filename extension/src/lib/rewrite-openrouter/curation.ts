@@ -8,7 +8,11 @@ export type CuratedOpenRouterModel = {
 
 export const OPENROUTER_CURATED_FREE_MODELS: CuratedOpenRouterModel[] = [
   { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B', tier: 'stable free' },
-  { id: 'nvidia/nemotron-3-nano-30b-a3b:free', label: 'Nemotron 3 Nano 30B', tier: 'experimental free' },
+  // 2026-05-31: the previous fallback id `nvidia/nemotron-3-nano-30b-a3b:free` was removed from the
+  // live OpenRouter catalog and replaced by this omni "reasoning" variant. It is a reasoning model,
+  // so it carries the CoT-budget-burn risk the OpenRouter guard stack mitigates; keep it experimental
+  // and re-evaluate against the corpus before trusting it as a fallback.
+  { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', label: 'Nemotron 3 Nano Omni 30B', tier: 'experimental free' },
 ]
 
 export const OPENROUTER_PRIMARY_FREE_MODEL = OPENROUTER_CURATED_FREE_MODELS[0].id
@@ -22,8 +26,12 @@ export const OPENROUTER_EXCLUDED_FREE_MODELS = new Set([
 
 export function normalizeOpenRouterModelId(modelId: string | undefined): string {
   const trimmed = modelId?.trim() ?? ''
-  if (trimmed === 'nvidia/nemotron-nano-30b-a3b:free') {
-    return 'nvidia/nemotron-3-nano-30b-a3b:free'
+  // Redirect the retired nano ids (old alias and the now-dead 3-nano) to the live omni variant.
+  if (
+    trimmed === 'nvidia/nemotron-nano-30b-a3b:free' ||
+    trimmed === 'nvidia/nemotron-3-nano-30b-a3b:free'
+  ) {
+    return 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free'
   }
   return trimmed
 }
