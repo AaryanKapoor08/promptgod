@@ -9,7 +9,7 @@ describe('trigger button render policy', () => {
 
   it('uses final-only composer replacement for non-Gemma OpenRouter models', () => {
     expect(shouldUseProgressiveComposerRender('chatgpt', 'nvidia/nemotron-3-super-120b-a12b:free')).toBe(false)
-    expect(shouldUseProgressiveComposerRender('chatgpt', 'nvidia/nemotron-3-nano-30b-a3b:free')).toBe(false)
+    expect(shouldUseProgressiveComposerRender('chatgpt', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free')).toBe(false)
     expect(shouldUseProgressiveComposerRender('claude', 'nvidia/nemotron-3-super-120b-a12b:free')).toBe(false)
   })
 
