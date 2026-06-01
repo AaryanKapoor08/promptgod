@@ -1,0 +1,9 @@
+{
+  "id": "text-staged-workflow-preserved",
+  "branch": "Text",
+  "source": "first analyze the failing tests and group them by root cause do not fix anything yet then after that propose the smallest patch for each group and keep the groups separate",
+  "expected_violation_codes": ["MERGED_SEPARATE_TASKS", "ANSWERED_INSTEAD_OF_REWRITING"],
+  "expected_preserved_constraints": ["preserve analyze-first then patch sequence", "keep groups separate", "do not solve yet"],
+  "severity": "regression-must-not-recur",
+  "notes": "Staged, multi-task selection must keep order and separation intact and not collapse into one request."
+}
