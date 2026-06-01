@@ -1,0 +1,9 @@
+{
+  "id": "text-thin-message-polish",
+  "branch": "Text",
+  "source": "status check thanks alot",
+  "expected_violation_codes": ["FIRST_PERSON_BRIEF", "ANSWERED_INSTEAD_OF_REWRITING"],
+  "expected_preserved_constraints": ["stay a short sendable message", "do not balloon into a structured prompt", "no invented recipient or date"],
+  "severity": "quality-target",
+  "notes": "Thin message selection must be polished in place, not expanded into a multi-section prompt."
+}
