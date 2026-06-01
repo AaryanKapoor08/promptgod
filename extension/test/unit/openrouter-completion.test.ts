@@ -56,7 +56,7 @@ Thus rewrite the prompt as a directive to the next AI.`,
     }), { status: 200 }))
 
     await expect(
-      callOpenRouterCompletionAPI('sk-or-v1-test', 'system', 'user', 'nvidia/nemotron-3-nano-30b-a3b:free')
+      callOpenRouterCompletionAPI('sk-or-v1-test', 'system', 'user', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free')
     ).rejects.toThrow('OpenRouter completion returned reasoning instead of rewritten prompt')
   })
 
@@ -88,7 +88,7 @@ Thus rewrite the prompt as a directive to the next AI.`,
     }), { status: 200 }))
 
     await expect(
-      callOpenRouterCompletionAPI('sk-or-v1-test', 'system', 'user', 'nvidia/nemotron-3-nano-30b-a3b:free')
+      callOpenRouterCompletionAPI('sk-or-v1-test', 'system', 'user', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free')
     ).rejects.toThrow('OpenRouter completion returned wrapper framing instead of rewritten prompt')
   })
 
@@ -233,7 +233,7 @@ Thus rewrite the prompt as a directive to the next AI.`,
 
     let caught: unknown = null
     try {
-      await callOpenRouterCompletionAPI('sk-or-v1-test', 'system', 'user', 'nvidia/nemotron-3-nano-30b-a3b:free')
+      await callOpenRouterCompletionAPI('sk-or-v1-test', 'system', 'user', 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free')
     } catch (error) {
       caught = error
     }
@@ -241,7 +241,7 @@ Thus rewrite the prompt as a directive to the next AI.`,
     expect(caught).toBeInstanceOf(Error)
     const message = (caught as Error).message
     expect(message).toContain('OpenRouter completion returned no text output')
-    expect(message).toContain('nvidia/nemotron-3-nano-30b-a3b:free')
+    expect(message).toContain('nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free')
     expect(message).toContain('refusal=I cannot rewrite that prompt')
   })
 
