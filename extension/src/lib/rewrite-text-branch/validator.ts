@@ -20,7 +20,7 @@ export function validateTextBranchRewrite(sourceText: string, output: string): V
     })
   }
 
-  if (/\[(?:recipient|project|date|topic|context|details)\]|\{\{?.+?\}?\}|<(?:recipient|project|date|topic|context|details)>/i.test(output)) {
+  if (/\[(?:recipient|project|date|topic|context|details|industry|goal|budget|audience|name|company|role|deadline|subject)\]|\{\{?.+?\}?\}|<(?:recipient|project|date|topic|context|details|industry|goal|budget|audience|name|company|role|deadline|subject)>/i.test(output)) {
     issues.push({
       code: 'DROPPED_DELIVERABLE',
       message: 'Output contains placeholder/template text.',
