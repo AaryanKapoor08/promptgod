@@ -2,6 +2,12 @@ import { isGoogleGemmaModel, normalizeGoogleModelName } from './models'
 
 export const GOOGLE_REWRITE_TEMPERATURE = 0.2
 export const GOOGLE_DEFAULT_OUTPUT_TOKENS = 512
+// Keep thinking OFF for rewrites. In Gemini 2.5, thinking tokens count against
+// maxOutputTokens, so any positive budget here can consume the whole 512-token
+// output allotment and return finish_reason MAX_TOKENS with no visible text.
+// To re-enable thinking later, raise GOOGLE_DEFAULT_OUTPUT_TOKENS to cover
+// thinking budget + desired visible output before setting this above 0.
+export const GOOGLE_REWRITE_THINKING_BUDGET = 0
 
 export function supportsGoogleThinkingConfig(model: string): boolean {
   return normalizeGoogleModelName(model).toLowerCase().startsWith('gemini-2.5-flash')
@@ -19,7 +25,7 @@ export function buildGoogleGenerationConfig(model: string, maxTokens: number): R
   }
 
   if (supportsGoogleThinkingConfig(model)) {
-    config.thinkingConfig = { thinkingBudget: 0 }
+    config.thinkingConfig = { thinkingBudget: GOOGLE_REWRITE_THINKING_BUDGET }
   }
 
   return config
