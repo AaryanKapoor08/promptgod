@@ -1,0 +1,9 @@
+{
+  "id": "llm-messy-checkout-500s",
+  "branch": "LLM",
+  "source": "Checkout has been throwing 500s since the last deploy. I have Datadog logs, 3 support tickets, and a Slack thread from the on-call engineer. Figure out what is actually broken versus noise, what evidence is missing, and write a short customer update and a separate engineering update. Do not merge them.",
+  "expected_violation_codes": ["MERGED_SEPARATE_TASKS", "DROPPED_DELIVERABLE", "ANSWERED_INSTEAD_OF_REWRITING"],
+  "expected_preserved_constraints": ["preserve Datadog logs, tickets, and Slack thread as evidence", "keep the customer update and engineering update separate", "rewrite the request, do not answer it"],
+  "severity": "regression-must-not-recur",
+  "notes": "Messy multi-task triage must preserve every evidence source and keep the two deliverables distinct without merging or answering."
+}
