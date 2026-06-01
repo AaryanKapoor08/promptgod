@@ -5,7 +5,7 @@ import {
   isSupportedGoogleNonGemmaModel,
 } from '../../src/lib/rewrite-google/models'
 import { buildGoogleRequestBody } from '../../src/lib/rewrite-google/request-policy'
-import { classifyGoogleEscalation, shouldRetryGoogleSameModel } from '../../src/lib/rewrite-google/retry-policy'
+import { classifyGoogleEscalation, isGoogleDailyQuotaError, shouldRetryGoogleSameModel } from '../../src/lib/rewrite-google/retry-policy'
 
 describe('rewrite-google policy modules', () => {
   it('exports only the non-Gemma supported model set', () => {
@@ -13,6 +13,16 @@ describe('rewrite-google policy modules', () => {
     expect(GOOGLE_PRIMARY_MODEL).toBe('gemini-2.5-flash')
     expect(isSupportedGoogleNonGemmaModel('gemini-2.5-flash')).toBe(true)
     expect(isSupportedGoogleNonGemmaModel('gemma-4-26b-a4b-it')).toBe(false)
+  })
+
+  it('detects daily-quota 429s and leaves per-minute 429s retryable', () => {
+    const dailyBody = '[LLMClient] Google API returned 429: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"violations":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}]}}'
+    const perMinuteBody = '[LLMClient] Google API returned 429: {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"violations":[{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}}'
+
+    expect(isGoogleDailyQuotaError(dailyBody)).toBe(true)
+    expect(isGoogleDailyQuotaError(new Error(dailyBody))).toBe(true)
+    expect(isGoogleDailyQuotaError(perMinuteBody)).toBe(false)
+    expect(isGoogleDailyQuotaError('Unknown error')).toBe(false)
   })
 
   it('uses systemInstruction and disables thinking for Gemini rewrites', () => {
