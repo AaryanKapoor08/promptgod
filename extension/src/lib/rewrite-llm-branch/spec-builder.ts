@@ -1,7 +1,7 @@
 import { assertBudget } from '../rewrite-core/budget'
 import { extractConstraints } from '../rewrite-core/constraints'
 import { normalizeSourceText } from '../rewrite-core/normalize'
-import type { RewriteProvider, RewriteRequest, RewriteSpec } from '../rewrite-core/types'
+import type { ConstraintSet, RewriteProvider, RewriteRequest, RewriteSpec, SourceMode } from '../rewrite-core/types'
 
 export type LlmBranchInput = {
   sourceText: string
@@ -34,7 +34,8 @@ export function buildLlmBranchSpec(input: LlmBranchInput): BuiltLlmBranchSpec {
     recentContext: input.recentContext,
   }
 
-  const systemPrompt = buildLlmBranchSystemPrompt()
+  const strategy = selectLlmRewriteStrategy(constraintSet.sourceMode, isThinLlmSource(normalized.text, constraintSet))
+  const systemPrompt = buildLlmBranchSystemPrompt(strategy)
   const userMessage = buildLlmBranchUserMessage(request, input.platform)
 
   assertBudget({
@@ -59,8 +60,50 @@ export function buildLlmBranchSpec(input: LlmBranchInput): BuiltLlmBranchSpec {
   }
 }
 
-export function buildLlmBranchSystemPrompt(): string {
-  return `You are PromptGod's LLM branch rewriter. Rewrite the user's chat prompt for the next AI; do not answer it.
+export type LlmRewriteStrategy =
+  | 'expand-thin'
+  | 'preserve-prompt'
+  | 'preserve-tasks'
+  | 'polish-message'
+  | 'structure-note'
+
+const llmStrategyDirectives: Record<LlmRewriteStrategy, string> = {
+  'expand-thin':
+    'The source is vague and low-effort. Do not just reword it. Expand it into a specific, structured, actionable prompt: add the concrete sections, steps, scope, and output shape the next AI should produce. Add structure and clarifying scope only — never invent facts, names, numbers, tools, or domain specifics the user did not give. Do not assume the user\'s situation, budget, audience, goals, or preferences: where those are unknown, name them as parameters for the user to fill in or have the next AI ask first, never assert defaults like "assume a moderate budget" or "for a beginner audience".',
+  'preserve-prompt':
+    'The source is already specific. Sharpen wording and structure without adding or dropping scope. Do not pad it, restate it, or echo it back almost unchanged.',
+  'preserve-tasks':
+    'The source has multiple tasks or stages. Keep every task and its order, and keep separate tasks visibly separate.',
+  'polish-message':
+    'The source is a message. Return a clear, sendable version; keep it concrete and human, not robotic.',
+  'structure-note':
+    'The source is rough notes. Turn it into a clear, actionable prompt without inventing specifics.',
+}
+
+export function selectLlmRewriteStrategy(sourceMode: SourceMode, isThin: boolean): LlmRewriteStrategy {
+  if (isThin) {
+    return 'expand-thin'
+  }
+  switch (sourceMode) {
+    case 'mixed task list':
+      return 'preserve-tasks'
+    case 'message':
+      return 'polish-message'
+    case 'note':
+      return 'structure-note'
+    case 'prompt':
+    default:
+      return 'preserve-prompt'
+  }
+}
+
+export function isThinLlmSource(sourceText: string, constraintSet: ConstraintSet): boolean {
+  const wordCount = sourceText.trim().split(/\s+/).filter(Boolean).length
+  return wordCount <= 12 && constraintSet.constraints.length === 0 && constraintSet.preserveTokens.length === 0
+}
+
+export function buildLlmBranchSystemPrompt(strategy?: LlmRewriteStrategy): string {
+  const contract = `You are PromptGod's LLM branch rewriter. Rewrite the user's chat prompt for the next AI; do not answer it.
 
 Contract:
 - Output only the rewritten prompt. No preamble, quotes, markdown fences, XML, or change notes.
@@ -76,6 +119,17 @@ Contract:
 - For personal/resume-project/agent-builder prompts, keep the rewrite as a concrete build/research prompt for a useful project, not a generic feasibility brief.
 - For incident, support, debugging, ops, and launch triage, keep direct operational wording: sort evidence, separate facts from guesses, rank likely paths, preserve team updates and risk callouts.
 - Use plain text unless the source explicitly asks for a format.`
+
+  const examples = `Examples (rough input -> good rewrite):
+- "how do i get good at X" -> Build a structured path to get strong at X: list the core sub-skills, order them from basics to advanced, and for each give what to study plus one concrete exercise. Keep it practical and hands-on.
+- "review the code i paste for bugs only, format file:line - problem - fix, if none say no issues found" -> Keep it almost verbatim: fix only grammar and ambiguity, never add scope or change the requested output format.
+- "checkout 500s since deploy, i have logs tickets slack, find real vs noise and whats missing, write a customer update AND a separate team update, dont merge them" -> Analyze the logs, support tickets, and Slack thread to find the root cause of the 500s since the deploy. Separate real issues from noise and name any missing evidence. Then write two separate updates: a concise customer update and a detailed engineering update; keep them distinct.`
+
+  const strategyLine = strategy
+    ? `\n\nStrategy for this input:\n- ${llmStrategyDirectives[strategy]}`
+    : ''
+
+  return `${contract}\n\n${examples}${strategyLine}`
 }
 
 export function buildLlmBranchUserMessage(request: RewriteRequest, platform: string): string {
