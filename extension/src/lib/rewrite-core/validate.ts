@@ -38,12 +38,15 @@ export function validateRewrite(input: ValidateRewriteInput): ValidationResult {
     'NEAR_ECHO_REWRITE',
     'Output is a near-echo of the source prompt.'
   )
-  addIf(
-    issues,
-    dropsDeliverable(input.sourceText, output),
-    'DROPPED_DELIVERABLE',
-    'Output dropped an explicit deliverable from the source.'
-  )
+  const missingDeliverable = firstMissingDeliverable(input.sourceText, output)
+  if (missingDeliverable) {
+    issues.push({
+      code: 'DROPPED_DELIVERABLE',
+      message: `Output dropped an explicit deliverable from the source: ${missingDeliverable}`,
+      severity: 'error',
+      span: { start: -1, end: -1, text: missingDeliverable },
+    })
+  }
   if (input.branch === 'LLM') {
     issues.push(...droppedPreserveTokenIssues(output, input.constraints))
   }
@@ -113,14 +116,14 @@ function answersInsteadOfRewriting(sourceText: string, output: string): boolean 
   return /^(?:summary|analysis|findings|root causes?|recommendations?|the complaints suggest|based on the evidence|the most likely)\b/i.test(output.trim())
 }
 
-function dropsDeliverable(sourceText: string, output: string): boolean {
+function firstMissingDeliverable(sourceText: string, output: string): string | null {
   const deliverables = extractDeliverables(sourceText)
   if (deliverables.length === 0) {
-    return false
+    return null
   }
 
   const normalizedOutput = normalizeForCompare(output)
-  return deliverables.some((deliverable) => !normalizedOutput.includes(deliverable))
+  return deliverables.find((deliverable) => !normalizedOutput.includes(deliverable)) ?? null
 }
 
 function isUnchangedRewrite(sourceText: string, output: string): boolean {
