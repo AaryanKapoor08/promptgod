@@ -45,15 +45,22 @@ ${sourceText}
 }
 
 function extractFailingSubstring(output: string, issue: ValidationIssue): string {
-  if (issue.code === 'DROPPED_PRESERVE_TOKEN' && issue.span?.text) {
+  if ((issue.code === 'DROPPED_PRESERVE_TOKEN' || issue.code === 'DROPPED_DELIVERABLE') && issue.span?.text) {
     return ` (${issue.span.text.slice(0, 30)})`
   }
 
   const patterns: Record<string, RegExp> = {
     FIRST_PERSON_BRIEF: /\b(?:my goal is|here'?s what i need you to do|deliverables include)\b.{0,30}/i,
     DECORATIVE_MARKDOWN: /(?:\*\*[^*\n]{1,30}\*\*|```|<instruction>)/i,
+    ANSWERED_INSTEAD_OF_REWRITING: /^(?:summary|analysis|findings|root causes?|recommendations?|the complaints suggest|based on the evidence|the most likely)\b.{0,30}/i,
+    ASKED_FORBIDDEN_QUESTION: /\b(?:who is the recipient|what is the project|please provide|please share|can you provide|could you provide|tell me more)\b.{0,30}/i,
+    GENERIC_PROJECT_BRIEF: /\b(?:explore|assess|evaluate)\s+(?:the\s+feasibility|building)\b.{0,30}/i,
   }
-  const match = output.match(patterns[issue.code])
+  const pattern = patterns[issue.code]
+  if (!pattern) {
+    return ''
+  }
+  const match = output.match(pattern)
   return match ? ` (${match[0].slice(0, 30)})` : ''
 }
 
