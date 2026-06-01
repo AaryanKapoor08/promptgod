@@ -45,13 +45,13 @@ describe('popup model options', () => {
       'nvidia/nemotron-3-super-120b-a12b:free',
       'openai/gpt-oss-20b:free',
       'inclusionai/ling-2.6-flash:free',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
       'openrouter/free',
     ])
 
     expect(options.map((model) => model.value)).toEqual([
       'nvidia/nemotron-3-super-120b-a12b:free',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
       'openai/gpt-4o-mini',
     ])
     expect(options.map((model) => model.value)).not.toContain('openrouter/free')
