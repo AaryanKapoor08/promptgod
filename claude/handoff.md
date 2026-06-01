@@ -1,39 +1,42 @@
-# PromptGod — Session Handoff (2026-05-31)
+# PromptGod — Session Handoff (2026-06-01)
 
 > Designed to be read WITH CodeGraph, not instead of it. This file carries only what the
 > graph cannot know (intent, decisions, state, next steps) and names the symbols to query.
-> Resume = run `codegraph sync` → `codegraph_context` on the named symbols → read the two
-> docs below. Do **not** re-read whole files.
+> Resume = `codegraph_context` on the named symbols → read the two docs below. Do **not**
+> re-read whole files; let the graph turn the symbol names here into code on demand.
 
 ## Resume in 30 seconds
-- **Standpoint:** rewrite-quality work is DONE and verified; the open question is throughput/economics (free tier ≈ ~15 enhances/day, not viable for daily use).
-- **Read first:** `codex/decision.md` (the free-vs-paid direction) and `codex/testing.md` (the Nemotron-vs-Flash battery).
-- **Then:** `codegraph sync`, and `codegraph_context` the symbols named under "What changed."
+- **Standpoint:** the **Text branch** (highlight-to-enhance, e.g. Gmail selection) was brought to **parity with the hardened LLM branch** today. Code complete, tests green, **uncommitted**.
+- **Read first:** `codex/decision.md` (free-vs-paid direction) and `codex/testing.md` (Nemotron-vs-Flash battery). The provider/economics question is still the open one — quality on both branches is now done.
+- **Then:** `codegraph_context` the symbols named under "What changed."
 
 ## Where things stand
-- Non-Gemma (Flash + OpenRouter) rewrite pipeline: quality passes on conservation, sharpness, tone, vague-expand, staged-workflow, constraint-heavy. `npm test` = 259 pass / 1 skip; `npm run build` clean.
-- **Nemotron 3 Super scored 10/10 across the C1–C4 battery** (`codex/testing.md`). Flash head-to-head is **pending** the Google daily-quota reset.
-- Decision still open: **personal/demo (free)** vs **cheap-paid OpenRouter Nemotron** (~$10 → 1000/day or pennies paid). See `codex/decision.md`.
+- Both rewrite branches are now quality-hardened and structurally symmetric (LLM = chat-prompt rewrite; Text = selected-text rewrite). `npm run build` clean, `tsc --noEmit` clean, `npx vitest run` = **261 pass / 1 skip** (the skip is the live OpenRouter eval, gated on `OPENROUTER_API_KEY`).
+- Open question unchanged from 2026-05-31: **throughput/economics** (free Flash ≈ ~15–20 enhances/day). See `codex/decision.md`.
 
 ## What changed today — intent → symbols to query in CodeGraph
-(Query these by name; the graph holds the code, this holds the why.)
-1. **Flash vague-input no-op fix** → `isThinLlmSource`, `selectLlmRewriteStrategy`, `buildLlmBranchSystemPrompt` (`rewrite-llm-branch/spec-builder.ts`). Why: thin/vague inputs were reworded, not expanded. Added few-shot examples + per-`sourceMode` strategy + an anti-invented-context rule (don't assume budget/audience).
-2. **Thinking-budget revert** → `GOOGLE_REWRITE_THINKING_BUDGET` (=0), `buildGoogleGenerationConfig` (`rewrite-google/request-policy.ts`). Why: a positive budget collides with `maxOutputTokens` in Gemini 2.5 → `MAX_TOKENS` empty output → every Flash call failed to Gemma. Keep at 0 unless output cap is raised first.
-3. **Daily-cap 429 retry fix** → `isGoogleDailyQuotaError` (`rewrite-google/retry-policy.ts`) + call site in `callGoogleAPI` (`llm-client.ts`). Why: daily-cap 429s were wastefully retried (2 requests/cap-hit); now skip retry → provider fallback. Per-minute 429s stay retryable.
-4. **Fuller retry feedback** → `extractFailingSubstring` (`rewrite-llm-branch/retry.ts`); `firstMissingDeliverable` + DROPPED_DELIVERABLE span (`rewrite-core/validate.ts`). Why: retry payload only named 2 of 6 issue codes.
-5. **Dead OpenRouter fallback repointed** → `OPENROUTER_CURATED_FREE_MODELS`, `normalizeOpenRouterModelId` (`rewrite-openrouter/curation.ts`) + `normalizeModelId` (`popup.ts`). Why: `nvidia/nemotron-3-nano-30b-a3b:free` was removed from the live catalog → repointed to `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`. **UNPROVEN — it's a reasoning variant; eval before trusting.**
-6. **Corpus** → 4 new entries in `test/regression/entries/` (`llm-vague-expand-system-design`, `llm-already-strong-code-reviewer`, `llm-messy-checkout-500s`, `llm-constraint-heavy-cover-letter`).
-7. **Docs** → `productvision.md` quota correction (Flash ~20 RPD, not 250); new `codex/decision.md`.
+(Query these by name; the graph holds the code, this holds the why. All in `extension/`.)
+1. **Text branch strategy machinery** → `selectTextRewriteStrategy`, `isThinTextSource`, `textStrategyDirectives`, `TextRewriteStrategy`, `buildTextBranchSystemPrompt` (`rewrite-text-branch/spec-builder.ts`). Why: the Text branch had a single static prompt; ported the LLM branch's per-`sourceMode` strategy + few-shot + anti-invented-context rules.
+2. **Key design decision (thin selections)** → in `selectTextRewriteStrategy`: a thin **message** → `polish-thin-message` (polish in place); a thin **prompt** → `expand-thin-prompt`. Why: unlike the LLM branch, a highlighted Gmail fragment must NOT be ballooned into a multi-section prompt. Mode-dependent, tuned for selections.
+3. **Budget raised for the richer Text prompt** → `assertBudget` call in `buildTextBranchSpec`: `text-first` hardCap 400→**900**, target 280-360→**500-800**. Snapshot baseline in `budget-snapshots.test.ts` `textFirst` 233→**563**.
+4. **Smart retry ported** → `buildTextRetryUserMessage`, `extractFailingSubstring`, `measureTextRetryPayloadBudget` (`rewrite-text-branch/retry.ts`). Why: old retry listed 2 bare issue codes; now severity-sorted top-3 with the failing substring, mirroring `buildLlmRetryUserMessage`. **Removed `shouldRetryTextBranch`** — Text now retries once on ANY validation failure (was gated to 3 codes → straight to fallback). New signature `(sourceText, failedOutput, issues)` — call site is `runTextBranchPipeline` in `service-worker.ts`.
+5. **Validator placeholder set broadened** → `validateTextBranchRewrite` (`rewrite-text-branch/validator.ts`): added industry/goal/budget/audience/name/company/role/deadline/subject to the placeholder-leak regex.
+6. **Deliberately NOT done** → `UNCHANGED_REWRITE` / `NEAR_ECHO_REWRITE` stay **LLM-only** in `validateRewrite` (`rewrite-core/validate.ts`). Why: the Text branch emits `[NO_CHANGE]` for already-strong selections (normalizes back to source) and short polishes look like echoes → enabling them would false-positive. Quality is enforced via strategy + retry instead.
+7. **Corpus** → 3 new Text entries in `test/regression/entries/`: `text-thin-message-polish`, `text-thin-prompt-expand`, `text-staged-workflow-preserved`. Harness `evaluateTextEntry` (`openrouter-primary-eval.test.ts`) now mirrors the LLM path (always retry once).
+
+## Rate-limiting (carried from 2026-05-31, still intact)
+- The Text branch routes through the **shared** provider layer, so yesterday's fixes apply unchanged: `GOOGLE_REWRITE_THINKING_BUDGET`=0 (`rewrite-google/request-policy.ts`), daily-cap 429 → no-retry → fallback via `isGoogleDailyQuotaError` (`rewrite-google/retry-policy.ts`) + `callGoogleAPI` (`llm-client.ts`), OpenRouter repoint (`OPENROUTER_CURATED_FREE_MODELS`).
+- The new ungated retry adds at most **+1 call** per failing Text request — same bound as the LLM branch. No new quota risk.
 
 ## Next steps (in order)
-1. After Google quota reset (~12:30 PM IST / midnight PT): run C1–C4 on **Flash**, fill the `Gemini Flash:` slots + Flash column in `codex/testing.md`, pick per-prompt winners.
-2. **Eval the omni-reasoning fallback** (#5) against C1–C4 before it ships — reasoning models echo/burn budget; if it cracks on C3, swap it.
-3. Make the direction call in `codex/decision.md` (free demo vs $10-credit Nemotron primary). Key open Q: API key distribution for ~10 users.
-4. **Commit** — everything below is uncommitted.
+1. **Commit** — Text-branch parity is one logical commit. Working tree has 8 modified + 3 new files (plus a pre-existing `.gitignore` edit — leave or split it out).
+2. **Live eval, now covering Text** — run the C1–C4 / corpus battery with `OPENROUTER_API_KEY` set; the Text corpus (21 + 3 new entries) needs the same Flash vs. Nemotron-Super vs. omni-Nemotron comparison the LLM branch got. Flash slots still pending the Google quota reset.
+3. **Eval the omni-reasoning OpenRouter fallback** (unproven reasoning variant) before it ships.
+4. Make the provider direction call in `codex/decision.md`.
 
 ## State
-- Branch `main`. Working tree: **all of today's work is uncommitted.** Suggested commit split is in `codex/decision.md` (code-changes section).
-- Reload `extension/dist` before any browser test.
+- Branch `main`. Uncommitted: `rewrite-text-branch/{spec-builder,retry,validator}.ts`, `service-worker.ts`, `test/unit/{rewrite-text-branch,budget-snapshots}.test.ts`, `test/regression/openrouter-primary-eval.test.ts`, 3 new `test/regression/entries/text-*.json`.
+- Reload `extension/dist` before any browser test (`npm run build` already run, dist is current).
 
 ## Why this file is short (the CodeGraph division of labor)
 - CodeGraph re-derives structure/callers/callees/impact from code deterministically and cheaply. Restating that here = wasted tokens + guaranteed staleness.
