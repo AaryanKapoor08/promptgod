@@ -78,7 +78,7 @@ describe('token budget seam', () => {
         "gemmaLlm": 945,
         "gemmaText": 867,
         "llmFirst": 636,
-        "textFirst": 233,
+        "textFirst": 563,
       }
     `)
   })
