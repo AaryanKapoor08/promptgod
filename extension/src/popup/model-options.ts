@@ -1,6 +1,7 @@
 import type { Provider } from '../lib/provider-policy'
 import type { OpenRouterAccountStatus } from '../lib/rewrite-openrouter/account-status'
 import { GOOGLE_GEMMA_FALLBACK_MODEL } from '../lib/rewrite-google/models'
+import { GROQ_CURATED_MODELS } from '../lib/rewrite-groq/models'
 import {
   OPENROUTER_CURATED_FREE_MODELS,
   buildCuratedOpenRouterChain,
@@ -45,6 +46,12 @@ const PROVIDER_MODEL_OPTIONS: Record<Exclude<Provider, 'openrouter'>, ModelOptio
     { label: 'Gemma 4 26B A4B IT', value: GOOGLE_GEMMA_FALLBACK_MODEL, cost: 'API access, availability varies', tier: 'free' },
     { label: 'Gemini 2.5 Flash Lite', value: 'gemini-2.5-flash-lite', cost: 'Manual option, free tier available', tier: 'free' },
   ],
+  groq: GROQ_CURATED_MODELS.map((m) => ({
+    label: m.label,
+    value: m.id,
+    cost: 'Free tier, high rate limits',
+    tier: 'free' as const,
+  })),
 }
 
 export const VISIBLE_PROVIDER_CHAIN: VisibleChainItem[] = [
