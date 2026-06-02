@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { extractConstraints } from '../../../src/lib/rewrite-core/constraints'
-import { validateRewrite } from '../../../src/lib/rewrite-core/validate'
+import { isEchoWithPadding, validateRewrite } from '../../../src/lib/rewrite-core/validate'
 
 const analyticsDecisionPrompt = `I need help with a technical decision, but do not jump straight into a confident recommendation.
 First analyze the uploaded architecture note, rough diagram, two slow query examples, and CSV sample, then wait for me.
@@ -93,6 +93,16 @@ describe('rewrite-core validate', () => {
 
     expect(output.length).toBeGreaterThan(source.length * 1.2)
     expect(issueCodesFor(source, output)).toContain('NEAR_ECHO_REWRITE')
+  })
+
+  it('isEchoWithPadding flags lazy echo-plus-padding but not a minimal-touch reword or exact echo', () => {
+    const source = 'Use the Zendesk thread, Slack notes, customer CSV, export job logs, and permissions screenshot to separate known facts, guesses, next checks, customer update, and internal update for a data export escalation.'
+    const reword = 'Use the Zendesk ticket, Slack notes, customer CSV, export job logs, and permissions screenshot to separate known facts, guesses, next checks, customer update, and internal update for a data export escalation.'
+    const padded = `${source} Additionally, keep every section clearly labelled and flag anything that needs review before the final version ships to the wider team for sign-off.`
+
+    expect(isEchoWithPadding(source, padded)).toBe(true)
+    expect(isEchoWithPadding(source, reword)).toBe(false)
+    expect(isEchoWithPadding(source, source)).toBe(false)
   })
 
   it('accepts a simple valid rewrite', () => {
