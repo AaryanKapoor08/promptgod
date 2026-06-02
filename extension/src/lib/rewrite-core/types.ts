@@ -1,6 +1,6 @@
 export type RewriteBranch = 'LLM' | 'Text'
 
-export type RewriteProvider = 'Google' | 'OpenRouter' | 'OpenAI' | 'Anthropic'
+export type RewriteProvider = 'Google' | 'OpenRouter' | 'OpenAI' | 'Anthropic' | 'Groq'
 
 export type SourceMode = 'prompt' | 'message' | 'note' | 'mixed task list'
 
