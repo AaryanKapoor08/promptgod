@@ -7,8 +7,10 @@ import { buildGemmaMetaPromptWithIntensity } from './lib/gemma-legacy/llm-branch
 import {
   buildUserMessage,
   callGoogleAPI,
+  callGroqCompletionAPI,
   callOpenRouterCompletionAPI,
 } from './lib/llm-client'
+import { GROQ_PRIMARY_MODEL } from './lib/rewrite-groq/models'
 import { RequestSupervisor } from './background/supervisor'
 import { translateError } from './lib/error-translator'
 import { runPromptGodContextMenuHandler } from './content/context-menu-handler'
@@ -82,20 +84,21 @@ function isGoogleGemmaModelId(model: string | undefined): boolean {
 
 function mapRewriteProvider(provider: string | undefined): RewriteProvider {
   if (provider === 'openrouter') return 'OpenRouter'
+  if (provider === 'groq') return 'Groq'
   return 'Google'
 }
 
 function assertActiveProvider(provider: string | undefined): void {
-  if (provider === undefined || provider === 'google' || provider === 'openrouter') {
+  if (provider === undefined || provider === 'google' || provider === 'openrouter' || provider === 'groq') {
     return
   }
 
-  throw new Error(`Unsupported provider: ${provider}. Use a Google or OpenRouter key.`)
+  throw new Error(`Unsupported provider: ${provider}. Use a Google, OpenRouter, or Groq key.`)
 }
 
 type ProviderFailureChainEntry = {
   branch: 'LLM' | 'Text'
-  provider: 'Google' | 'Gemma' | 'OpenRouter'
+  provider: 'Google' | 'Gemma' | 'OpenRouter' | 'Groq'
   model: string
   stage: 'primary' | 'fallback' | 'final-chain'
   failure: string
@@ -193,6 +196,13 @@ async function getSettings(): Promise<{
     includeConversationContext: cachedSettings.includeConversationContext,
     providerApiKeys: cachedSettings.providerApiKeys,
   }
+}
+
+// Clears the in-memory settings cache so the next getSettings() re-reads storage.
+// In production this happens via the storage.onChanged listener; exported so tests can
+// switch providers between cases without cross-test cache bleed.
+export function resetSettingsCache(): void {
+  cachedSettings = null
 }
 
 async function buildOpenRouterModelChain(requestedModel: string): Promise<string[]> {
@@ -658,7 +668,69 @@ function isGemmaTimeoutError(error: unknown): boolean {
   return error instanceof Error && /Request timed out after|overall request budget exceeded/i.test(error.message)
 }
 
+// Groq → OpenRouter-Nemotron escalation gate. Escalate on any provider/validation
+// failure so Nemotron catches whatever Groq misses (the "Groq+Nemo combo"); the only
+// non-escalating case is a user abort, which must propagate.
+function shouldEscalateGroqToFallback(error: unknown): boolean {
+  if (error instanceof Error && /aborted/i.test(error.message)) return false
+  return true
+}
+
+// Groq primary with an OpenRouter-Nemotron safety net. Parallel to the Google chain;
+// the Google/Gemini path is untouched. Activates only when the user selects Groq.
+async function runGroqBranchWithNemotronFallback(request: LlmBranchPipelineRequest): Promise<string> {
+  const failureChain: ProviderFailureChainEntry[] = []
+  const groqModel = request.model ?? GROQ_PRIMARY_MODEL
+
+  try {
+    return await runLlmBranchPipeline({
+      ...request,
+      model: groqModel,
+      escalateOnValidationFailure: true,
+    })
+  } catch (error) {
+    failureChain.push(buildFailureChainEntry('LLM', 'Groq', groqModel, 'primary', error))
+    if (!(error instanceof RewriteValidationFailure) && !shouldEscalateGroqToFallback(error)) {
+      throw error
+    }
+    console.info({
+      cause: error,
+      from: 'Groq',
+      to: 'OpenRouter',
+      trigger: error instanceof RewriteValidationFailure ? 'validation-failure' : 'provider-fallback-eligible',
+    }, '[PromptGod] Escalating Groq LLM branch request to OpenRouter Nemotron fallback')
+  }
+
+  const openRouterKey = request.providerApiKeys?.openrouter
+  if (!openRouterKey) {
+    failureChain.push({
+      branch: 'LLM',
+      provider: 'OpenRouter',
+      model: OPENROUTER_PRIMARY_FREE_MODEL,
+      stage: 'final-chain',
+      failure: 'no OpenRouter key saved for Groq→Nemotron fallback',
+    })
+    throw buildAllProvidersFailedError('LLM', failureChain)
+  }
+
+  try {
+    return await runLlmBranchPipeline({
+      ...request,
+      apiKey: openRouterKey,
+      provider: 'openrouter',
+      model: OPENROUTER_PRIMARY_FREE_MODEL,
+      escalateOnValidationFailure: true,
+    })
+  } catch (error) {
+    failureChain.push(buildFailureChainEntry('LLM', 'OpenRouter', OPENROUTER_PRIMARY_FREE_MODEL, 'final-chain', error))
+    throw buildAllProvidersFailedError('LLM', failureChain)
+  }
+}
+
 async function runLlmBranchWithProviderFallback(request: LlmBranchPipelineRequest): Promise<string> {
+  if (request.provider === 'groq') {
+    return await runGroqBranchWithNemotronFallback(request)
+  }
   if (request.provider !== 'google') {
     return await runLlmBranchPipeline(request)
   }
@@ -1196,6 +1268,10 @@ async function collectContextEnhancementText({
     return await collectOpenRouterCompletionText(apiKey, systemPrompt, userMessage, model, promptWordCount, signal)
   }
 
+  if (provider === 'groq') {
+    return await callGroqCompletionAPI(apiKey, systemPrompt, userMessage, model ?? GROQ_PRIMARY_MODEL, 512)
+  }
+
   if (provider === 'google') {
     return await callGoogleAPI(
       apiKey,
@@ -1206,7 +1282,7 @@ async function collectContextEnhancementText({
     )
   }
 
-  throw new Error(`Unsupported provider: ${provider}. Use a Google or OpenRouter key.`)
+  throw new Error(`Unsupported provider: ${provider}. Use a Google, OpenRouter, or Groq key.`)
 }
 
 async function collectOpenRouterCompletionText(
