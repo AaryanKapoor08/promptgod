@@ -33,7 +33,23 @@ export function orderOpenRouterChainByCooldown(models: string[], now: number = D
 }
 
 export function buildOpenRouterRouteChain(requestedModel?: string, liveModelIds?: string[]): string[] {
-  return orderOpenRouterChainByCooldown(buildCuratedOpenRouterChain(requestedModel, liveModelIds))
+  const curated = buildCuratedOpenRouterChain(requestedModel, liveModelIds)
+  const sorted = orderOpenRouterChainByCooldown(curated)
+  // Observability: the cooldown sorter ranks ready models ahead of cooling ones, which
+  // can demote the intended head-of-chain model (e.g. an explicitly-selected but
+  // rate-limited Omni) below a fallback. Surface it so a "picked Omni but Super ran
+  // first" run is diagnosable instead of silent. Routing behavior is unchanged.
+  if (curated.length > 1 && sorted[0] !== curated[0]) {
+    console.info(
+      {
+        requestedHead: curated[0],
+        runningFirst: sorted[0],
+        cooldownRemainingMs: getOpenRouterCooldownRemainingMs(curated[0]),
+      },
+      '[PromptGod] Selected OpenRouter model is cooling down; a ready fallback runs first'
+    )
+  }
+  return sorted
 }
 
 export function isOpenRouterRateLimitError(error: unknown): boolean {
