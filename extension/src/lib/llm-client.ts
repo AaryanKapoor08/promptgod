@@ -6,6 +6,7 @@ import type { ConversationContext } from '../content/adapters/types'
 import { detectProviderFromApiKey, type Provider } from './provider-policy'
 import { GOOGLE_GEMMA_FALLBACK_MODEL, GOOGLE_PRIMARY_MODEL, isGoogleGemmaModel, normalizeGoogleModelName } from './rewrite-google/models'
 import { OPENROUTER_PRIMARY_FREE_MODEL } from './rewrite-openrouter/curation'
+import { GROQ_COMPLETIONS_URL, GROQ_PRIMARY_MODEL, normalizeGroqModelId } from './rewrite-groq/models'
 import { buildGoogleRequestBody, GOOGLE_REWRITE_TEMPERATURE } from './rewrite-google/request-policy'
 import {
   GOOGLE_MAX_ATTEMPTS_PER_MODEL,
@@ -22,6 +23,7 @@ const REQUEST_TIMEOUT_MS = {
   openai: 60000,
   google: 60000,
   openrouter: 60000,
+  groq: 60000,
 } as const
 
 const GOOGLE_TOTAL_REQUEST_BUDGET_MS = 85000
@@ -1338,6 +1340,55 @@ export async function callOpenRouterCompletionAPI(
   if (!text) {
     const diagnostic = describeOpenRouterNoTextPayload(payload, model)
     throw new Error(`[LLMClient] OpenRouter completion returned no text output (${diagnostic})`)
+  }
+
+  return text
+}
+
+// Non-streaming Groq request (OpenAI-compatible chat completions).
+// Deliberately minimal: just extract + trim. Unlike the OpenRouter path we do NOT
+// apply the OpenRouter-only wrapper/echo regexes here (per the handoff guardrail that
+// keeps those provider-specific). Rewrite quality is enforced downstream by the shared
+// validateRewrite + targeted-retry stack (which already includes the echo containment guard).
+export async function callGroqCompletionAPI(
+  apiKey: string,
+  systemPrompt: string,
+  userMessage: string,
+  model: string = GROQ_PRIMARY_MODEL,
+  maxTokens: number = 512
+): Promise<string> {
+  const resolvedModel = normalizeGroqModelId(model)
+  const response = await fetchWithTimeout(GROQ_COMPLETIONS_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: resolvedModel,
+      max_tokens: maxTokens,
+      temperature: REWRITE_TEMPERATURE,
+      stream: false,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+      ],
+    }),
+  }, REQUEST_TIMEOUT_MS.groq)
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => 'Unknown error')
+    const retryAfter = response.headers.get('retry-after')
+    const retryAfterPart = retryAfter ? ` (retry-after ${retryAfter})` : ''
+    throw new Error(`[LLMClient] Groq API returned ${response.status}${retryAfterPart}: ${errorBody}`, {
+      cause: new Error(errorBody),
+    })
+  }
+
+  const payload = await response.json().catch(() => null)
+  const text = extractOpenAICompatibleText(payload).trim()
+  if (!text) {
+    throw new Error(`[LLMClient] Groq completion returned no text output (${resolvedModel})`)
   }
 
   return text
