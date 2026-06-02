@@ -5,14 +5,16 @@ vi.mock('../../src/lib/llm-client', async (importOriginal) => {
   return {
     ...actual,
     callGoogleAPI: vi.fn(),
+    callGroqCompletionAPI: vi.fn(),
     callOpenRouterCompletionAPI: vi.fn(),
   }
 })
 
-import { callGoogleAPI, callOpenRouterCompletionAPI } from '../../src/lib/llm-client'
-import { handleContextEnhance, handleEnhance } from '../../src/service-worker'
+import { callGoogleAPI, callGroqCompletionAPI, callOpenRouterCompletionAPI } from '../../src/lib/llm-client'
+import { handleContextEnhance, handleEnhance, resetSettingsCache } from '../../src/service-worker'
 
 const googleCall = vi.mocked(callGoogleAPI)
+const groqCall = vi.mocked(callGroqCompletionAPI)
 const openRouterCompletionCall = vi.mocked(callOpenRouterCompletionAPI)
 
 function createPort() {
@@ -31,7 +33,9 @@ function postedMessages(port: ReturnType<typeof createPort>) {
 
 describe('service worker provider fallback after validator failures', () => {
   beforeEach(() => {
+    resetSettingsCache()
     googleCall.mockReset()
+    groqCall.mockReset()
     openRouterCompletionCall.mockReset()
     vi.stubGlobal('chrome', {
       storage: {
@@ -114,6 +118,51 @@ describe('service worker provider fallback after validator failures', () => {
     expect(googleCall.mock.calls[0][3]).toBe('gemini-2.5-flash')
     expect(googleCall.mock.calls[1][3]).toBe('gemini-2.5-flash')
     expect(googleCall.mock.calls[2][3]).toBe('gemma-4-26b-a4b-it')
+    expect(postedMessages(port)).not.toContainEqual({
+      type: 'TOKEN',
+      text: 'Write a launch update to [recipient] about [project].',
+    })
+    expect(postedMessages(port)).toContainEqual({
+      type: 'TOKEN',
+      text: 'Use the launch docs to draft the checklist, memo, FAQ, and internal summary.',
+    })
+  })
+
+  it('escalates Groq to the OpenRouter Nemotron fallback after Groq first pass and retry both fail validation', async () => {
+    vi.mocked(chrome.storage.local.get).mockImplementation(async (keys: string[] | string) => {
+      const keyList = Array.isArray(keys) ? keys : [keys]
+      if (keyList.includes('apiKey')) {
+        return {
+          apiKey: 'gsk_testkey',
+          provider: 'groq',
+          model: 'llama-3.3-70b-versatile',
+          includeConversationContext: true,
+          providerApiKeys: { groq: 'gsk_testkey', openrouter: 'sk-or-test' },
+        }
+      }
+      return { totalEnhancements: 0, enhancementsByPlatform: {} }
+    })
+
+    // Groq fails validation on both first pass and retry (placeholder leak), then Nemotron succeeds.
+    groqCall
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+    openRouterCompletionCall.mockResolvedValueOnce('Use the launch docs to draft the checklist, memo, FAQ, and internal summary.')
+
+    const port = createPort()
+    await handleEnhance(
+      port,
+      {
+        type: 'ENHANCE',
+        platform: 'chatgpt',
+        rawPrompt: 'Use the launch docs to draft a checklist, memo, FAQ, and internal summary.',
+        context: { isNewConversation: true, conversationLength: 0 },
+      } as never,
+      new AbortController().signal
+    )
+
+    expect(groqCall).toHaveBeenCalledTimes(2)
+    expect(openRouterCompletionCall).toHaveBeenCalled()
     expect(postedMessages(port)).not.toContainEqual({
       type: 'TOKEN',
       text: 'Write a launch update to [recipient] about [project].',
