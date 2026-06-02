@@ -145,6 +145,15 @@ function isNearEchoRewrite(sourceText: string, output: string): boolean {
     return false
   }
 
+  // Echo-plus-padding: the entire source is reproduced verbatim inside a longer
+  // output. The byte-exact UNCHANGED_REWRITE guard misses this (output != source),
+  // and the [0.8, 1.2] length-ratio window below excludes it once the padding pushes
+  // the ratio past 1.2 (observed on Flash, C3: 1076 chars echoing an ~854-char source).
+  // A genuine rewrite never reproduces the whole source as a contiguous run.
+  if (sourceWords.length >= 30 && normalizedOutput.includes(normalizedSource)) {
+    return true
+  }
+
   const lengthRatio = outputWords.length / sourceWords.length
   if (lengthRatio < 0.8 || lengthRatio > 1.2) {
     return false
