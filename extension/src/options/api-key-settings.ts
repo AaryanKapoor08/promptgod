@@ -1,11 +1,12 @@
 import { analyzeApiKey, type Provider } from '../lib/provider-policy'
 import { PreferenceManager } from '../lib/preferences'
 
-type OptionsProvider = Extract<Provider, 'google' | 'openrouter'>
+type OptionsProvider = Extract<Provider, 'google' | 'openrouter' | 'groq'>
 
 const PROVIDERS: Record<OptionsProvider, string> = {
   google: 'Google',
   openrouter: 'OpenRouter',
+  groq: 'Groq',
 }
 
 export async function initApiKeySettings(): Promise<void> {
