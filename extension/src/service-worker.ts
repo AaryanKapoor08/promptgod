@@ -797,10 +797,23 @@ async function runLlmBranchWithProviderFallback(request: LlmBranchPipelineReques
       promptWordCount: request.promptWordCount,
       signal: request.signal,
     })
-    if (isNoChangeLlmOutput(request.rawPrompt, gemmaOutput)) {
-      throw new RewriteValidationFailure('LLM')
+    // Re-validate the frozen Gemma fallback through the SAME gate as every other provider. The
+    // legacy path shipped Gemma output after only a no-change check, so a structurally-broken
+    // rewrite (e.g. dropped deliverables) could reach the composer as "success" (testing #5).
+    // On failure, escalate to the OpenRouter chain instead of shipping it; minimal-touch
+    // near-echoes are accepted as no-change, consistent with the primary pipeline.
+    const gemmaFinal = finalizeLlmBranchCandidate(request.rawPrompt, gemmaOutput)
+    if (gemmaFinal.validation.ok || isMinimalTouchNoChange(request.rawPrompt, gemmaFinal.text, gemmaFinal.validation)) {
+      return gemmaFinal.text
     }
-    return gemmaOutput
+    console.info({
+      branch: 'LLM',
+      provider: 'google',
+      model: GOOGLE_GEMMA_FALLBACK_MODEL,
+      stage: 'gemma-validation',
+      issueCodes: validationIssueCodes(gemmaFinal.validation),
+    }, '[PromptGod] Frozen Gemma fallback failed validation; escalating instead of shipping')
+    throw new RewriteValidationFailure('LLM')
   } catch (error) {
     failureChain.push(buildFailureChainEntry('LLM', 'Gemma', GOOGLE_GEMMA_FALLBACK_MODEL, 'fallback', error))
     if (!(error instanceof RewriteValidationFailure) && !shouldEscalateGoogleToFallback(error)) {

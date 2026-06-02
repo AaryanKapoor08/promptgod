@@ -11,6 +11,8 @@ vi.mock('../../src/lib/llm-client', async (importOriginal) => {
 })
 
 import { callGoogleAPI, callGroqCompletionAPI, callOpenRouterCompletionAPI } from '../../src/lib/llm-client'
+import { resetOpenRouterAccountStatusSession } from '../../src/lib/rewrite-openrouter/account-status'
+import { resetOpenRouterCooldowns } from '../../src/lib/rewrite-openrouter/route-policy'
 import { handleContextEnhance, handleEnhance, resetSettingsCache } from '../../src/service-worker'
 
 const googleCall = vi.mocked(callGoogleAPI)
@@ -34,6 +36,8 @@ function postedMessages(port: ReturnType<typeof createPort>) {
 describe('service worker provider fallback after validator failures', () => {
   beforeEach(() => {
     resetSettingsCache()
+    resetOpenRouterAccountStatusSession()
+    resetOpenRouterCooldowns()
     googleCall.mockReset()
     groqCall.mockReset()
     openRouterCompletionCall.mockReset()
@@ -355,6 +359,55 @@ describe('service worker provider fallback after validator failures', () => {
     expect(postedMessages(port)).toContainEqual({
       type: 'ERROR',
       message: 'No provider returned a usable rewrite. Retry once, or save an OpenRouter key/custom model and try again.',
+    })
+  })
+
+  it('re-validates the Gemma fallback and escalates instead of shipping a broken rewrite', async () => {
+    vi.mocked(chrome.storage.local.get).mockImplementation(async (keys: string[] | string) => {
+      const keyList = Array.isArray(keys) ? keys : [keys]
+      if (keyList.includes('apiKey')) {
+        return {
+          apiKey: 'AIzaTestKey',
+          provider: 'google',
+          model: 'gemini-2.5-flash',
+          includeConversationContext: true,
+          providerApiKeys: { openrouter: 'sk-or-test' },
+        }
+      }
+      return { totalEnhancements: 0, enhancementsByPlatform: {} }
+    })
+
+    // Google primary fails validation (placeholder) twice; Gemma returns a structurally-broken
+    // rewrite that drops deliverables; the OpenRouter chain then returns a valid rewrite. The
+    // broken Gemma output must NOT be shipped as success (testing #5).
+    googleCall
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+      .mockResolvedValueOnce('Create a launch checklist and nothing else.')
+    openRouterCompletionCall.mockResolvedValueOnce('Use the launch docs to draft the checklist, memo, FAQ, and internal summary.')
+
+    const port = createPort()
+    await handleEnhance(
+      port,
+      {
+        type: 'ENHANCE',
+        platform: 'chatgpt',
+        rawPrompt: 'Use the launch docs to draft a checklist, memo, FAQ, and internal summary.',
+        context: { isNewConversation: true, conversationLength: 0 },
+      } as never,
+      new AbortController().signal
+    )
+
+    expect(googleCall).toHaveBeenCalledTimes(3)
+    expect(googleCall.mock.calls[2][3]).toBe('gemma-4-26b-a4b-it')
+    expect(openRouterCompletionCall).toHaveBeenCalled()
+    expect(postedMessages(port)).not.toContainEqual({
+      type: 'TOKEN',
+      text: 'Create a launch checklist and nothing else.',
+    })
+    expect(postedMessages(port)).toContainEqual({
+      type: 'TOKEN',
+      text: 'Use the launch docs to draft the checklist, memo, FAQ, and internal summary.',
     })
   })
 
