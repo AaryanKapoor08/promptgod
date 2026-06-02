@@ -1,4 +1,4 @@
-export type Provider = 'openai' | 'anthropic' | 'google' | 'openrouter'
+export type Provider = 'openai' | 'anthropic' | 'google' | 'openrouter' | 'groq'
 
 export interface ProviderPolicy {
   keyRegex: RegExp
@@ -28,13 +28,17 @@ export const PROVIDER_POLICIES: Record<Provider, ProviderPolicy> = {
     keyRegex: /^sk-or-[a-zA-Z0-9-]+$/,
     supportedModels: [],
   },
+  groq: {
+    keyRegex: /^gsk_[A-Za-z0-9]+$/,
+    supportedModels: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+  },
 }
 
 export function detectProviderFromApiKey(key: string): Provider | null {
   const trimmed = key.trim()
   if (!trimmed) return null
 
-  const order: Provider[] = ['anthropic', 'openrouter', 'google', 'openai']
+  const order: Provider[] = ['anthropic', 'openrouter', 'groq', 'google', 'openai']
   for (const provider of order) {
     if (PROVIDER_POLICIES[provider].keyRegex.test(trimmed)) {
       return provider
