@@ -84,6 +84,17 @@ describe('rewrite-core validate', () => {
     expect(issueCodesFor(source, output)).toContain('NEAR_ECHO_REWRITE')
   })
 
+  it('emits NEAR_ECHO_REWRITE when the full source is echoed verbatim plus padding (ratio > 1.2)', () => {
+    // Regression for the Flash C3 echo-plus-padding hole: the byte-exact UNCHANGED guard
+    // misses it (output != source) and the [0.8, 1.2] length-ratio window excludes it once
+    // the padding pushes the ratio past 1.2. The full source still appears as a contiguous run.
+    const source = 'Plan the Q3 rollout of our new pricing moving from three tiers to four tiers and grandfathering existing pro users for exactly six months. Provide a rollout timeline, a comms plan split by segment, the top five risks with mitigations, and a list of what finance, legal, and support each need to sign off before launch.'
+    const output = `${source} Additionally, ensure every section is clearly labelled, keep all segment messaging separate, use placeholders wherever real numbers are missing, and flag any grandfathering language that legal must review prior to the public launch announcement going live.`
+
+    expect(output.length).toBeGreaterThan(source.length * 1.2)
+    expect(issueCodesFor(source, output)).toContain('NEAR_ECHO_REWRITE')
+  })
+
   it('accepts a simple valid rewrite', () => {
     expect(validateRewrite({
       branch: 'LLM',
