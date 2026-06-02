@@ -32,11 +32,12 @@ const saveStatus = document.getElementById('save-status') as HTMLDivElement
 
 headerLogo.src = chrome.runtime.getURL('assets/icon-48.png')
 
-const ALL_PROVIDERS: Provider[] = ['anthropic', 'openai', 'google', 'openrouter']
+const ALL_PROVIDERS: Provider[] = ['anthropic', 'openai', 'google', 'openrouter', 'groq']
 
-const SELECTABLE_PROVIDER_NAMES: Record<Extract<Provider, 'google' | 'openrouter'>, string> = {
+const SELECTABLE_PROVIDER_NAMES: Record<Extract<Provider, 'google' | 'openrouter' | 'groq'>, string> = {
   google: 'Google',
   openrouter: 'OpenRouter',
+  groq: 'Groq',
 }
 
 const draftModelByProvider: Partial<Record<Provider, string>> = {}
@@ -44,8 +45,8 @@ const savedApiKeysByProvider: Partial<Record<Provider, string>> = {}
 const draftApiKeysByProvider: Partial<Record<Provider, string>> = {}
 let openRouterLiveModelIds: string[] | undefined
 
-function isSelectableProvider(value: string | null | undefined): value is Extract<Provider, 'google' | 'openrouter'> {
-  return value === 'google' || value === 'openrouter'
+function isSelectableProvider(value: string | null | undefined): value is Extract<Provider, 'google' | 'openrouter' | 'groq'> {
+  return value === 'google' || value === 'openrouter' || value === 'groq'
 }
 
 function getSelectableProviderName(provider: Provider): string {
