@@ -173,6 +173,117 @@ describe('service worker provider fallback after validator failures', () => {
     })
   })
 
+  it('falls back to the Groq 8B backstop after Groq 70B and OpenRouter Nemotron both fail', async () => {
+    vi.mocked(chrome.storage.local.get).mockImplementation(async (keys: string[] | string) => {
+      const keyList = Array.isArray(keys) ? keys : [keys]
+      if (keyList.includes('apiKey')) {
+        return {
+          apiKey: 'gsk_testkey',
+          provider: 'groq',
+          model: 'llama-3.3-70b-versatile',
+          includeConversationContext: true,
+          providerApiKeys: { groq: 'gsk_testkey', openrouter: 'sk-or-test' },
+        }
+      }
+      return { totalEnhancements: 0, enhancementsByPlatform: {} }
+    })
+
+    // 70B fails validation (placeholder leak) on first pass + retry, Nemotron rejects at request
+    // time, then the Groq 8B backstop succeeds.
+    groqCall
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+      .mockResolvedValueOnce('Use the launch docs to draft the checklist, memo, FAQ, and internal summary.')
+    openRouterCompletionCall.mockRejectedValue(new Error('OpenRouter API returned 429'))
+
+    const port = createPort()
+    await handleEnhance(
+      port,
+      {
+        type: 'ENHANCE',
+        platform: 'chatgpt',
+        rawPrompt: 'Use the launch docs to draft a checklist, memo, FAQ, and internal summary.',
+        context: { isNewConversation: true, conversationLength: 0 },
+      } as never,
+      new AbortController().signal
+    )
+
+    expect(groqCall).toHaveBeenCalledTimes(3)
+    expect(groqCall.mock.calls[2][3]).toBe('llama-3.1-8b-instant')
+    expect(openRouterCompletionCall).toHaveBeenCalled()
+    expect(postedMessages(port)).toContainEqual({
+      type: 'TOKEN',
+      text: 'Use the launch docs to draft the checklist, memo, FAQ, and internal summary.',
+    })
+  })
+
+  it('skips Nemotron and uses the Groq 8B backstop when no OpenRouter key is saved', async () => {
+    vi.mocked(chrome.storage.local.get).mockImplementation(async (keys: string[] | string) => {
+      const keyList = Array.isArray(keys) ? keys : [keys]
+      if (keyList.includes('apiKey')) {
+        return {
+          apiKey: 'gsk_testkey',
+          provider: 'groq',
+          model: 'llama-3.3-70b-versatile',
+          includeConversationContext: true,
+          providerApiKeys: { groq: 'gsk_testkey' },
+        }
+      }
+      return { totalEnhancements: 0, enhancementsByPlatform: {} }
+    })
+
+    groqCall
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+      .mockResolvedValueOnce('Write a launch update to [recipient] about [project].')
+      .mockResolvedValueOnce('Use the launch docs to draft the checklist, memo, FAQ, and internal summary.')
+
+    const port = createPort()
+    await handleEnhance(
+      port,
+      {
+        type: 'ENHANCE',
+        platform: 'chatgpt',
+        rawPrompt: 'Use the launch docs to draft a checklist, memo, FAQ, and internal summary.',
+        context: { isNewConversation: true, conversationLength: 0 },
+      } as never,
+      new AbortController().signal
+    )
+
+    expect(openRouterCompletionCall).not.toHaveBeenCalled()
+    expect(groqCall).toHaveBeenCalledTimes(3)
+    expect(groqCall.mock.calls[2][3]).toBe('llama-3.1-8b-instant')
+    expect(postedMessages(port)).toContainEqual({
+      type: 'TOKEN',
+      text: 'Use the launch docs to draft the checklist, memo, FAQ, and internal summary.',
+    })
+  })
+
+  it('accepts a minimal-touch near-echo rewrite of a strong prompt instead of escalating', async () => {
+    const rawPrompt = 'Use the Zendesk thread, Slack notes, customer CSV, export job logs, and permissions screenshot to separate known facts, guesses, next checks, customer update, and internal update for a data export escalation.'
+    const minimalTouch = 'Use the Zendesk ticket, Slack notes, customer CSV, export job logs, and permissions screenshot to separate known facts, guesses, next checks, customer update, and internal update for a data export escalation.'
+
+    googleCall
+      .mockResolvedValueOnce(minimalTouch)
+      .mockResolvedValueOnce(minimalTouch)
+
+    const port = createPort()
+    await handleEnhance(
+      port,
+      {
+        type: 'ENHANCE',
+        platform: 'chatgpt',
+        rawPrompt,
+        context: { isNewConversation: true, conversationLength: 0 },
+      } as never,
+      new AbortController().signal
+    )
+
+    // First pass + targeted retry both come back as a minimal-touch near-echo; the pipeline accepts
+    // it as no-change rather than escalating to the Gemma fallback (no third call).
+    expect(googleCall).toHaveBeenCalledTimes(2)
+    expect(postedMessages(port)).toContainEqual({ type: 'TOKEN', text: minimalTouch })
+  })
+
   it('drops recent context for long self-contained non-Gemma LLM prompts', async () => {
     const rawPrompt = 'Use the Zendesk thread, Slack threads, customer Loom video, customer CSV, export job logs, and permissions screenshot to triage the customer data export escalation. Separate confirmed facts from assumptions, identify fast disproof checks, assign owners, draft a cautious customer update, and draft a separate internal update for Engineering, Support, and Customer Success.'
     googleCall.mockResolvedValueOnce('Create a data-export escalation triage prompt using evidence from Zendesk, Slack, the customer Loom, the customer CSV, export-job logs, and the permissions screenshot. Ask the model to separate facts from assumptions, propose quick disproof checks with owners, and produce distinct customer-facing and internal Engineering, Support, and Customer Success updates.')

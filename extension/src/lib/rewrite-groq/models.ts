@@ -11,6 +11,12 @@ export type GroqModel = {
 
 export const GROQ_PRIMARY_MODEL = 'llama-3.3-70b-versatile'
 
+// Backstop model for the Groq chain. The 8B instant model sits in a separate, far more
+// generous free-tier bucket (14,400 RPD / 500K TPD vs the 70B's 1,000 RPD / 100K TPD) on
+// the SAME Groq key, so it serves as the "can't fully run out" net after the 70B primary
+// and the OpenRouter-Nemotron fallback are exhausted.
+export const GROQ_FALLBACK_MODEL = 'llama-3.1-8b-instant'
+
 export const GROQ_CURATED_MODELS: GroqModel[] = [
   { id: 'llama-3.3-70b-versatile', label: 'Llama 3.3 70B (versatile)' },
   { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B (instant)' },

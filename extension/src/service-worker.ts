@@ -10,7 +10,8 @@ import {
   callGroqCompletionAPI,
   callOpenRouterCompletionAPI,
 } from './lib/llm-client'
-import { GROQ_PRIMARY_MODEL } from './lib/rewrite-groq/models'
+import { GROQ_FALLBACK_MODEL, GROQ_PRIMARY_MODEL } from './lib/rewrite-groq/models'
+import { isEchoWithPadding } from './lib/rewrite-core/validate'
 import { RequestSupervisor } from './background/supervisor'
 import { translateError } from './lib/error-translator'
 import { runPromptGodContextMenuHandler } from './content/context-menu-handler'
@@ -676,12 +677,15 @@ function shouldEscalateGroqToFallback(error: unknown): boolean {
   return true
 }
 
-// Groq primary with an OpenRouter-Nemotron safety net. Parallel to the Google chain;
-// the Google/Gemini path is untouched. Activates only when the user selects Groq.
+// Groq chain: 70B primary → OpenRouter-Nemotron-Super → Groq 8B backstop. Exhaust the strong
+// models first, then fall to the 8B instant model (separate, far larger free-tier bucket on the
+// same Groq key) as the "can't fully run out" net. Parallel to the Google chain; the
+// Google/Gemini path is untouched. Activates only when the user selects Groq.
 async function runGroqBranchWithNemotronFallback(request: LlmBranchPipelineRequest): Promise<string> {
   const failureChain: ProviderFailureChainEntry[] = []
   const groqModel = request.model ?? GROQ_PRIMARY_MODEL
 
+  // Stage 1 — Groq 70B primary.
   try {
     return await runLlmBranchPipeline({
       ...request,
@@ -701,28 +705,47 @@ async function runGroqBranchWithNemotronFallback(request: LlmBranchPipelineReque
     }, '[PromptGod] Escalating Groq LLM branch request to OpenRouter Nemotron fallback')
   }
 
+  // Stage 2 — OpenRouter Nemotron Super (only when a key is saved). A failure here does NOT end
+  // the chain; it falls through to the Groq 8B backstop below.
   const openRouterKey = request.providerApiKeys?.openrouter
-  if (!openRouterKey) {
+  if (openRouterKey) {
+    try {
+      return await runLlmBranchPipeline({
+        ...request,
+        apiKey: openRouterKey,
+        provider: 'openrouter',
+        model: OPENROUTER_PRIMARY_FREE_MODEL,
+        escalateOnValidationFailure: true,
+      })
+    } catch (error) {
+      failureChain.push(buildFailureChainEntry('LLM', 'OpenRouter', OPENROUTER_PRIMARY_FREE_MODEL, 'fallback', error))
+      console.info({
+        cause: error,
+        from: 'OpenRouter',
+        to: 'Groq',
+        trigger: error instanceof RewriteValidationFailure ? 'validation-failure' : 'provider-fallback-eligible',
+      }, '[PromptGod] Escalating OpenRouter Nemotron to Groq 8B backstop')
+    }
+  } else {
     failureChain.push({
       branch: 'LLM',
       provider: 'OpenRouter',
       model: OPENROUTER_PRIMARY_FREE_MODEL,
-      stage: 'final-chain',
-      failure: 'no OpenRouter key saved for Groq→Nemotron fallback',
+      stage: 'fallback',
+      failure: 'no OpenRouter key saved; skipped to Groq 8B backstop',
     })
-    throw buildAllProvidersFailedError('LLM', failureChain)
   }
 
+  // Stage 3 — Groq 8B backstop. escalateOnValidationFailure is off so a validation miss yields a
+  // conservative fallback rather than a hard error: the backstop's job is to always return text.
   try {
     return await runLlmBranchPipeline({
       ...request,
-      apiKey: openRouterKey,
-      provider: 'openrouter',
-      model: OPENROUTER_PRIMARY_FREE_MODEL,
-      escalateOnValidationFailure: true,
+      model: GROQ_FALLBACK_MODEL,
+      escalateOnValidationFailure: false,
     })
   } catch (error) {
-    failureChain.push(buildFailureChainEntry('LLM', 'OpenRouter', OPENROUTER_PRIMARY_FREE_MODEL, 'final-chain', error))
+    failureChain.push(buildFailureChainEntry('LLM', 'Groq', GROQ_FALLBACK_MODEL, 'final-chain', error))
     throw buildAllProvidersFailedError('LLM', failureChain)
   }
 }
@@ -904,11 +927,43 @@ async function runLlmBranchPipeline({
     return retryFinal.text
   }
 
+  // Already-strong prompt: if the model STILL returns only a minimal-touch near-echo after a
+  // targeted retry, that is the correct response to a prompt that needs no real improvement —
+  // accept it instead of failing the whole provider chain on the echo guard (testing 2026-06-02
+  // #1). Scoped to genuine minimal rewordings only: an exact UNCHANGED echo or a lazy
+  // echo-plus-padding still fails (we never hand the user their verbatim input back as a result).
+  if (isMinimalTouchNoChange(rawPrompt, retryFinal.text, retryFinal.validation)) {
+    console.info({
+      branch: 'LLM',
+      provider,
+      model: model ?? '',
+      stage: 'minimal-touch-accepted',
+    }, '[PromptGod] LLM branch accepted minimal-touch rewrite as no-change')
+    return retryFinal.text
+  }
+
   if (escalateOnValidationFailure) {
     throw new RewriteValidationFailure('LLM')
   }
 
   return buildConservativeFallback({ sourceText: rawPrompt })
+}
+
+// True when the only thing wrong with the rewrite is that it is a near-echo of the source
+// AND that near-echo is a genuine minimal-touch rewording (not an exact UNCHANGED echo, not a
+// lazy echo-plus-padding). On an already-strong prompt this is the right answer, so we ship it
+// rather than exhausting the provider chain. Any other issue (dropped deliverable, answered-
+// instead, unchanged, padding-echo, etc.) keeps the existing fail/escalate behavior.
+function isMinimalTouchNoChange(
+  sourceText: string,
+  output: string,
+  validation: { issues: Array<{ code: string }> }
+): boolean {
+  if (validation.issues.length === 0) {
+    return false
+  }
+  const echoOnly = validation.issues.every((issue) => issue.code === 'NEAR_ECHO_REWRITE')
+  return echoOnly && !isEchoWithPadding(sourceText, output)
 }
 
 function finalizeLlmBranchCandidate(sourceText: string, output: string): {
