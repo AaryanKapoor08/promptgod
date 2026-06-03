@@ -21,7 +21,7 @@
 <body>
   <h1>Privacy Policy for PromptGod</h1>
   <div class="meta">
-    <p><strong>Effective Date:</strong> April 4, 2026</p>
+    <p><strong>Effective Date:</strong> June 3, 2026</p>
     <p><strong>Developer:</strong> Aaryan Kapoor</p>
   </div>
 
@@ -37,16 +37,20 @@
   <h3>3.1 Data Stored on Your Device</h3>
   <p>PromptGod stores the following data locally on your device using <code>chrome.storage.local</code>:</p>
   <ul>
-    <li><strong>Authentication information:</strong> Your API key for the AI provider you choose</li>
+    <li><strong>Authentication information:</strong> Your API key(s) for the AI provider(s) you choose</li>
     <li>Your selected AI provider</li>
     <li>Your selected model</li>
+    <li>Your preferences (for example, whether to include conversation context, a custom OpenRouter model ID, and whether you have seen the extension tooltip)</li>
+    <li>Local extension counters, such as the total number of enhancements and the supported AI site where an enhancement was used</li>
+    <li>OpenRouter status and model-cache data, such as your OpenRouter free-model limit/remaining count and the cached list of available free models</li>
   </ul>
-  <p>This data is stored exclusively on your device. It is never transmitted to the developer or any server the developer controls. Note that <code>chrome.storage.local</code> is device-local only and is not synced across devices by Chrome.</p>
+  <p>This data is stored exclusively on your device and is used only to operate the extension. It is never transmitted to the developer or any server the developer controls. Note that <code>chrome.storage.local</code> is device-local only and is not synced across devices by Chrome.</p>
 
   <h3>3.2 Data Accessed Temporarily (Not Stored)</h3>
-  <p>When you click "Enhance," PromptGod temporarily reads the following data from the active AI chat page:</p>
+  <p>When you click "Enhance" (or choose "Enhance with PromptGod" from the right-click menu), PromptGod temporarily reads the following data from the active AI chat page:</p>
   <ul>
-    <li><strong>Website content:</strong> The prompt text you have typed in the AI chat input field</li>
+    <li><strong>Website content:</strong> The prompt text you have typed in the AI chat input field, or the text you have selected on the page</li>
+    <li><strong>Conversation context (optional):</strong> If you enable "Include conversation context," a short excerpt of recent on-page conversation text to help the rewrite stay relevant</li>
   </ul>
   <p>This text is read solely to send it to your selected AI provider for enhancement. It is processed in memory only, is never stored by the extension, and is never transmitted to the developer or any server the developer controls. Once the enhancement is complete, the original text is no longer retained by the extension.</p>
 
@@ -67,26 +71,32 @@
   <p>Your data is not used for any other purpose. It is never shared with the developer, sold, or disclosed to any other party.</p>
 
   <h2>5. Third-Party Services</h2>
-  <p>When you click "Enhance," your prompt text is sent directly from the extension to the AI provider you have selected. The developer is not a middleman in this process and does not receive, log, or store any of the data that is transmitted.</p>
+  <p>When you click "Enhance," your prompt text is sent directly from the extension to the AI provider you have selected. To improve reliability, PromptGod may automatically fall back from your selected provider to another supported provider listed below (for example, from Google to OpenRouter) if a request fails — but only ever to a provider you have saved an API key for. The developer is not a middleman in this process and does not receive, log, or store any of the data that is transmitted.</p>
 
-  <h3>5.1 Anthropic API</h3>
-  <p>If you select Anthropic as your provider, your prompt is sent to the Anthropic API at: <a href="https://api.anthropic.com/v1/messages">https://api.anthropic.com/v1/messages</a></p>
-  <p>API usage data is not used for model training by default. Your use of the Anthropic API is governed by Anthropic's Privacy Policy: <a href="https://www.anthropic.com/legal/privacy">https://www.anthropic.com/legal/privacy</a></p>
+  <h3>5.1 Google (Gemini / Gemma) API</h3>
+  <p>If you select Google as your provider, your prompt is sent to the Google Generative Language API at: <a href="https://generativelanguage.googleapis.com/">https://generativelanguage.googleapis.com/</a></p>
+  <p>PromptGod may also use your Google API key to request the available Google model list from the same API so the model picker can be populated.</p>
+  <p>Your use of the Google API is governed by Google's Privacy Policy: <a href="https://policies.google.com/privacy">https://policies.google.com/privacy</a>. Data handling for the Gemini API is described in the <a href="https://ai.google.dev/gemini-api/terms">Gemini API Additional Terms of Service</a>.</p>
 
-  <h3>5.2 OpenAI API</h3>
-  <p>If you select OpenAI as your provider, your prompt is sent to the OpenAI API at: <a href="https://api.openai.com/v1/chat/completions">https://api.openai.com/v1/chat/completions</a></p>
-  <p>API data is not used for training by default. Your use of the OpenAI API is governed by OpenAI's Privacy Policy: <a href="https://openai.com/policies/privacy-policy">https://openai.com/policies/privacy-policy</a></p>
+  <h3>5.2 Groq API</h3>
+  <p>If you select Groq as your provider, your prompt is sent to the Groq API at: <a href="https://api.groq.com/openai/v1/chat/completions">https://api.groq.com/openai/v1/chat/completions</a></p>
+  <p>Groq does not use API inputs or outputs to train its models. Your use of the Groq API is governed by Groq's Privacy Policy: <a href="https://groq.com/privacy-policy/">https://groq.com/privacy-policy/</a></p>
 
   <h3>5.3 OpenRouter API</h3>
   <p>If you select OpenRouter as your provider, your prompt is sent to the OpenRouter API at: <a href="https://openrouter.ai/api/v1/chat/completions">https://openrouter.ai/api/v1/chat/completions</a></p>
+  <p>PromptGod may also request OpenRouter's model catalog and inspect your OpenRouter key status so it can show free-model availability and daily-limit status. Prompt text is not sent to the model-catalog endpoint.</p>
   <p>OpenRouter does not store prompts or responses by default unless you explicitly opt into logging. Your use of the OpenRouter API is governed by OpenRouter's Privacy Policy: <a href="https://openrouter.ai/privacy">https://openrouter.ai/privacy</a></p>
 
   <h2>6. Permissions</h2>
   <p>PromptGod requests only the minimum permissions necessary to function:</p>
   <ul>
-    <li><strong><code>storage</code></strong> — To save your API key, selected provider, and selected model locally on your device using <code>chrome.storage.local</code>.</li>
+    <li><strong><code>storage</code></strong> — To save your API key(s), selected provider, selected model, and preferences locally on your device using <code>chrome.storage.local</code>.</li>
+    <li><strong><code>activeTab</code></strong> — To access the current AI chat tab you are working in when you trigger an enhancement.</li>
+    <li><strong><code>scripting</code></strong> — To inject the "Enhance" button and apply the enhanced text on supported AI chat pages.</li>
+    <li><strong><code>contextMenus</code></strong> — To add the "Enhance with PromptGod" option to the right-click menu for selected text.</li>
+    <li><strong><code>alarms</code></strong> — To schedule periodic background refreshes of the available free model list. No personal data is involved.</li>
     <li><strong>Host permissions for AI chat sites</strong> (chatgpt.com, claude.ai, gemini.google.com, perplexity.ai) — To inject the "Enhance" button into the chat interface on supported AI platforms.</li>
-    <li><strong>Host permissions for API endpoints</strong> (api.anthropic.com, api.openai.com, openrouter.ai) — To send enhancement requests directly to your chosen AI provider using your own API key.</li>
+    <li><strong>Host permissions for API endpoints</strong> (generativelanguage.googleapis.com, api.groq.com, openrouter.ai) — To send enhancement requests directly to your chosen AI provider using your own API key.</li>
   </ul>
   <p>No other permissions are requested. PromptGod does not request access to all websites, browsing history, or any data beyond what is listed above.</p>
 
