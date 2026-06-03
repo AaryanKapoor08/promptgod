@@ -1,7 +1,7 @@
 import type { Provider } from '../lib/provider-policy'
 import type { OpenRouterAccountStatus } from '../lib/rewrite-openrouter/account-status'
 import { GOOGLE_GEMMA_FALLBACK_MODEL } from '../lib/rewrite-google/models'
-import { GROQ_CURATED_MODELS } from '../lib/rewrite-groq/models'
+import { GROQ_CURATED_MODELS, GROQ_PRIMARY_MODEL } from '../lib/rewrite-groq/models'
 import {
   OPENROUTER_CURATED_FREE_MODELS,
   buildCuratedOpenRouterChain,
@@ -54,16 +54,34 @@ const PROVIDER_MODEL_OPTIONS: Record<Exclude<Provider, 'openrouter'>, ModelOptio
   })),
 }
 
-export const VISIBLE_PROVIDER_CHAIN: VisibleChainItem[] = [
-  { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
-  { label: 'Gemma', value: GOOGLE_GEMMA_FALLBACK_MODEL },
-  { label: 'OpenRouter Free Chain', value: 'openrouter-free-chain' },
-]
+// Provider priority for the runtime fallback chain. Each provider contributes two models;
+// the chain runs every provider's primary first (in this order), then every secondary, so the
+// strongest model from each saved key is tried before any backstop. The two most reliable models
+// are Groq 70B and Nemotron Super, so Groq leads and OpenRouter sits ahead of Gemini:
+// e.g. Groq + OpenRouter + Gemini => Llama 70B -> Nemotron Super -> Flash -> Llama 8B -> Nano -> Gemma.
+const FALLBACK_PROVIDER_PRIORITY: Array<'groq' | 'google' | 'openrouter'> = ['groq', 'openrouter', 'google']
 
-export const RECOMMENDED_GOOGLE_MODELS: VisibleChainItem[] = [
+const FALLBACK_PROVIDER_MODELS: Record<'groq' | 'google' | 'openrouter', { primary: string; secondary: string }> = {
+  groq: { primary: 'Llama 3.3 70B', secondary: 'Llama 3.1 8B' },
+  google: { primary: 'Gemini 2.5 Flash', secondary: 'Gemma' },
+  openrouter: { primary: 'Nemotron Super', secondary: 'Nemotron Nano' },
+}
+
+// Builds the visible fallback chain from the providers the user has saved a key for. With no keys
+// saved we show the full three-provider chain as guidance. Interleaving is primaries-then-secondaries
+// so the popup text matches the order the runtime escalates through.
+export function buildVisibleFallbackChain(savedProviders: string[]): string[] {
+  const available = FALLBACK_PROVIDER_PRIORITY.filter((provider) => savedProviders.includes(provider))
+  const ordered = available.length > 0 ? available : FALLBACK_PROVIDER_PRIORITY
+  const primaries = ordered.map((provider) => FALLBACK_PROVIDER_MODELS[provider].primary)
+  const secondaries = ordered.map((provider) => FALLBACK_PROVIDER_MODELS[provider].secondary)
+  return [...primaries, ...secondaries]
+}
+
+export const RECOMMENDED_MODELS: VisibleChainItem[] = [
+  { label: 'Llama 3.3 70B (Groq)', value: GROQ_PRIMARY_MODEL },
+  { label: 'Nemotron 3 Super 120B', value: 'nvidia/nemotron-3-super-120b-a12b:free' },
   { label: 'Gemini 2.5 Flash', value: 'gemini-2.5-flash' },
-  { label: 'Gemma 4 26B A4B IT', value: GOOGLE_GEMMA_FALLBACK_MODEL },
-  { label: 'Gemini 2.5 Flash Lite', value: 'gemini-2.5-flash-lite' },
 ]
 
 export function getOpenRouterFreeChainOptions(liveModelIds?: string[]): ModelOption[] {
@@ -110,6 +128,10 @@ export function formatOpenRouterAccountStatus(status: OpenRouterAccountStatus | 
       message: `OpenRouter ${status.bucket} cap reached. Routing is paused today.`,
       className: 'status status--warning',
     }
+  }
+
+  if (status.bucket === 'unknown' && status.remaining === null) {
+    return { message: '', className: 'status' }
   }
 
   const remaining = status.remaining === null ? '' : `, ${status.remaining} remaining`
