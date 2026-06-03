@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { OPENROUTER_CURATED_FREE_MODELS } from '../../src/lib/rewrite-openrouter/curation'
 import {
-  RECOMMENDED_GOOGLE_MODELS,
-  VISIBLE_PROVIDER_CHAIN,
+  RECOMMENDED_MODELS,
+  buildVisibleFallbackChain,
   formatOpenRouterAccountStatus,
   getModelOptions,
   getOpenRouterFreeChainOptions,
@@ -10,11 +10,11 @@ import {
 } from '../../src/popup/model-options'
 
 describe('popup model options', () => {
-  it('renders recommended Google models before the compact fallback chain', () => {
-    expect(RECOMMENDED_GOOGLE_MODELS.map((item) => item.label)).toEqual([
+  it('recommends the strongest free model from each provider before the compact fallback chain', () => {
+    expect(RECOMMENDED_MODELS.map((item) => item.label)).toEqual([
+      'Llama 3.3 70B (Groq)',
+      'Nemotron 3 Super 120B',
       'Gemini 2.5 Flash',
-      'Gemma 4 26B A4B IT',
-      'Gemini 2.5 Flash Lite',
     ])
   })
 
@@ -26,11 +26,38 @@ describe('popup model options', () => {
     ])
   })
 
-  it('renders the visible provider chain in runtime fallback order', () => {
-    expect(VISIBLE_PROVIDER_CHAIN.map((item) => item.label)).toEqual([
+  it('builds the dynamic fallback chain per saved key, primaries before secondaries', () => {
+    expect(buildVisibleFallbackChain(['groq'])).toEqual(['Llama 3.3 70B', 'Llama 3.1 8B'])
+    expect(buildVisibleFallbackChain(['openrouter'])).toEqual(['Nemotron Super', 'Nemotron Nano'])
+    expect(buildVisibleFallbackChain(['google'])).toEqual(['Gemini 2.5 Flash', 'Gemma'])
+    expect(buildVisibleFallbackChain(['google', 'openrouter'])).toEqual([
+      'Nemotron Super',
       'Gemini 2.5 Flash',
+      'Nemotron Nano',
       'Gemma',
-      'OpenRouter Free Chain',
+    ])
+    expect(buildVisibleFallbackChain(['groq', 'openrouter'])).toEqual([
+      'Llama 3.3 70B',
+      'Nemotron Super',
+      'Llama 3.1 8B',
+      'Nemotron Nano',
+    ])
+    expect(buildVisibleFallbackChain(['groq', 'google'])).toEqual([
+      'Llama 3.3 70B',
+      'Gemini 2.5 Flash',
+      'Llama 3.1 8B',
+      'Gemma',
+    ])
+  })
+
+  it('shows the full three-provider chain when no keys are saved yet', () => {
+    expect(buildVisibleFallbackChain([])).toEqual([
+      'Llama 3.3 70B',
+      'Nemotron Super',
+      'Gemini 2.5 Flash',
+      'Llama 3.1 8B',
+      'Nemotron Nano',
+      'Gemma',
     ])
   })
 
