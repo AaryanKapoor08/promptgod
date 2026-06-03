@@ -5,8 +5,8 @@ import { GOOGLE_GEMMA_FALLBACK_MODEL } from '../lib/rewrite-google/models'
 import { OPENROUTER_ACCOUNT_STATUS_KEY, type OpenRouterAccountStatus } from '../lib/rewrite-openrouter/account-status'
 import { getOpenRouterCatalogWithPinnedFallback } from '../lib/rewrite-openrouter/catalog'
 import {
-  RECOMMENDED_GOOGLE_MODELS,
-  VISIBLE_PROVIDER_CHAIN,
+  RECOMMENDED_MODELS,
+  buildVisibleFallbackChain,
   formatOpenRouterAccountStatus,
   getModelOptions,
   validateCustomOpenRouterModelId,
@@ -23,7 +23,6 @@ const openRouterAccountStatus = document.getElementById('openrouter-account-stat
 const recommendedModelsList = document.getElementById('recommended-models') as HTMLOListElement
 const visibleChain = document.getElementById('visible-chain') as HTMLSpanElement
 const contextToggle = document.getElementById('context-toggle') as HTMLInputElement
-const enhancementCountEl = document.getElementById('enhancement-count') as HTMLSpanElement
 const customModelSection = document.getElementById('custom-model-section') as HTMLDivElement
 const customModelInput = document.getElementById('custom-model') as HTMLInputElement
 const customModelStatus = document.getElementById('custom-model-status') as HTMLDivElement
@@ -108,7 +107,7 @@ function replaceApiKeyMap(
 
 async function initPopup() {
   const prefs = await PreferenceManager.getPreferences()
-  const extraPrefs = await chrome.storage.local.get(['customModel', 'totalEnhancements'])
+  const extraPrefs = await chrome.storage.local.get(['customModel'])
 
   const normalizedModel = normalizeModelId(prefs.model)
   if (normalizedModel && normalizedModel !== prefs.model) {
@@ -147,7 +146,6 @@ async function initPopup() {
   }
 
   updateKeyValidationUI(apiKeyInput.value, savedProvider)
-  updateEnhancementCount(extraPrefs.totalEnhancements ?? 0)
 
   if (savedProvider === 'openrouter') {
     void loadOpenRouterModels()
@@ -271,6 +269,7 @@ saveButton.addEventListener('click', async () => {
 
   draftModelByProvider[provider] = normalizeModelId(modelToSave)
   updateKeyValidationUI(apiKey, provider)
+  renderModelGuidance()
   showSaveStatus(apiKey ? 'Settings saved.' : 'Settings saved. Add an API key before enhancing prompts.', 'saved')
 })
 
@@ -335,6 +334,8 @@ function updateModelDropdown(provider: Provider, selectedModel?: string): void {
 function updateModelHint(provider: Provider): void {
   if (provider === 'openrouter') {
     modelHint.textContent = 'Curated free chain'
+  } else if (provider === 'groq') {
+    modelHint.textContent = 'Llama 70B first | 8B backup'
   } else {
     modelHint.textContent = 'Flash first | Gemma free'
   }
@@ -353,14 +354,6 @@ function updateCostHint(): void {
 
   const selected = getModelOptions(provider, openRouterLiveModelIds).find((model) => model.value === modelSelect.value)
   costHint.textContent = selected?.cost ?? 'Saved custom model'
-}
-
-function updateEnhancementCount(count: number): void {
-  if (count > 0) {
-    enhancementCountEl.textContent = `${count} prompt${count === 1 ? '' : 's'} enhanced`
-  } else {
-    enhancementCountEl.textContent = ''
-  }
 }
 
 function showSaveStatus(message: string, type: 'saved' | 'error'): void {
@@ -397,13 +390,16 @@ async function updateOpenRouterAccountStatus(): Promise<void> {
 
 function renderModelGuidance(): void {
   recommendedModelsList.innerHTML = ''
-  for (const item of RECOMMENDED_GOOGLE_MODELS) {
+  for (const item of RECOMMENDED_MODELS) {
     const row = document.createElement('li')
     row.textContent = item.label
     recommendedModelsList.appendChild(row)
   }
 
-  visibleChain.textContent = VISIBLE_PROVIDER_CHAIN.map((item) => item.label).join(' -> ')
+  const savedProviders = Object.entries(savedApiKeysByProvider)
+    .filter(([, key]) => Boolean(key && key.trim()))
+    .map(([provider]) => provider)
+  visibleChain.textContent = buildVisibleFallbackChain(savedProviders).join(' -> ')
 }
 
 async function loadGoogleModels(apiKey: string, selectedModel?: string): Promise<void> {
