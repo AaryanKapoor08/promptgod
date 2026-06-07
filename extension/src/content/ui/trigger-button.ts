@@ -110,14 +110,18 @@ const CHATGPT_MODE_LABEL = /^(Auto|Instant|Thinking|Standard|Extended|Pro|Fast|L
 /**
  * Locate the ChatGPT reasoning-mode pill ("Extended", "Auto", "Thinking", ...).
  *
- * The pill only exists on Plus/Pro accounts. Returns null on free accounts (no
- * pill), which the caller treats as the "not Plus" branch.
+ * The pill only exists on Plus/Pro accounts and can live in a toolbar that is a
+ * sibling of the <form> rather than inside it, so we search a region a couple of
+ * levels above the form — but stay scoped to the composer so we never match an
+ * unrelated "Pro"/"Legacy" button elsewhere on the page. Returns null on free
+ * accounts (no pill), which the caller treats as the "not Plus" branch.
  */
 function findChatGPTModePill(
   form: HTMLElement | null | undefined,
   sendButton: HTMLElement
 ): HTMLElement | null {
-  const searchRoot = form ?? null
+  const searchRoot =
+    form?.parentElement?.parentElement ?? form?.parentElement ?? form ?? null
   if (!searchRoot) {
     return null
   }
