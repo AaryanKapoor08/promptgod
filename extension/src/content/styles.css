@@ -18,8 +18,14 @@
   flex-shrink: 0;
 }
 
-/* ChatGPT: absolutely positioned inside the form, bottom-right, left of mic/send */
-.promptgod-trigger-btn--chatgpt {
+/* ChatGPT: inline, to the left of the mode/effort selector pill */
+.promptgod-trigger-btn--chatgpt-inline {
+  margin: 0 4px 0 0;
+  align-self: center;
+}
+
+/* ChatGPT fallback: absolutely positioned inside the form, bottom-right */
+.promptgod-trigger-btn--chatgpt-floating {
   position: absolute;
   bottom: 8px;
   right: 76px;

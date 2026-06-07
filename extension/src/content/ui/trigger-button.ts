@@ -104,16 +104,22 @@ export function shouldUseProgressiveComposerRender(platform: string, model: unkn
   return false
 }
 
-export function injectTriggerButton(adapter: PlatformAdapter): void {
+export function injectTriggerButton(adapter: PlatformAdapter): boolean {
   // Don't double-inject
   if (injectedButton && document.body.contains(injectedButton)) {
-    return
+    return true
+  }
+
+  // Input must be present before we can anchor the button to the composer.
+  // Returning false lets the caller keep retrying while the platform hydrates.
+  if (!adapter.getInputElement()) {
+    return false
   }
 
   const sendButton = adapter.getSendButton()
   if (!sendButton) {
     console.info('[PromptGod] Send button not found, cannot inject trigger button')
-    return
+    return false
   }
 
   const button = document.createElement('button')
@@ -257,12 +263,47 @@ export function injectTriggerButton(adapter: PlatformAdapter): void {
     }
   } else if (platform === 'chatgpt') {
     button.classList.add('promptgod-trigger-btn--chatgpt')
-    // Absolute-position the button inside the form so it stays fixed at the bottom
-    // regardless of ChatGPT's internal DOM nesting or text area growth.
     const input = adapter.getInputElement()
     const form = input?.closest('form')
-    if (form) {
-      // Ensure the form is a positioning context
+    const composer = form ?? input?.parentElement?.parentElement?.parentElement ?? null
+
+    // Sit to the LEFT of the mode/effort selector pill (e.g. "Extended", "Auto",
+    // "Thinking") instead of floating on top of it. Detect the pill by its visible
+    // text label, with a fallback to any short text-bearing button that isn't the
+    // send button (mic/voice/"+" buttons are icon-only and carry no text).
+    const MODE_LABEL = /^(Auto|Instant|Thinking|Standard|Extended|Pro|Fast|Light|Legacy)\b/i
+    const candidates = Array.from(
+      composer?.querySelectorAll<HTMLElement>('button, [role="button"]') ?? []
+    ).filter((btn) => {
+      if (btn === sendButton || btn.contains(sendButton) || sendButton.contains(btn)) return false
+      const text = btn.textContent?.trim() ?? ''
+      return text.length > 0 && text.length < 24
+    })
+    const modeButton =
+      candidates.find((btn) => MODE_LABEL.test(btn.textContent?.trim() ?? '')) ?? candidates[0]
+
+    if (composer && modeButton) {
+      button.classList.add('promptgod-trigger-btn--chatgpt-inline')
+      let container = modeButton.parentElement
+      while (container && container !== composer && !container.contains(sendButton)) {
+        container = container.parentElement
+      }
+      if (container) {
+        let directChild: HTMLElement | null = modeButton
+        while (directChild && directChild.parentElement !== container) {
+          directChild = directChild.parentElement
+        }
+        if (directChild) {
+          container.insertBefore(button, directChild)
+        } else {
+          sendButton.parentElement?.insertBefore(button, sendButton)
+        }
+      } else {
+        sendButton.parentElement?.insertBefore(button, sendButton)
+      }
+    } else if (form) {
+      // Fallback: absolute-position the button inside the form, anchored bottom-right.
+      button.classList.add('promptgod-trigger-btn--chatgpt-floating')
       const formPosition = getComputedStyle(form).position
       if (formPosition === 'static') {
         form.style.position = 'relative'
@@ -277,6 +318,7 @@ export function injectTriggerButton(adapter: PlatformAdapter): void {
 
   injectedButton = button
   console.info({ platform: adapter.getPlatform() }, '[PromptGod] Trigger button injected')
+  return true
 }
 
 async function handleEnhanceClick(adapter: PlatformAdapter): Promise<void> {

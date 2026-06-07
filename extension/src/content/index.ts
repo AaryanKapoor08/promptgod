@@ -21,38 +21,52 @@ if (adapter) {
   const platform = adapter.getPlatform()
   console.info({ platform }, '[PromptGod] Content script loaded')
 
-  // Wait for platform's hydration before injecting UI
+  // The keyboard shortcut and the re-injection observer don't depend on the
+  // composer existing yet, so wire them up immediately. Installing the observer
+  // up front is what makes slow-hydrating platforms (notably Gemini) reliable:
+  // if the composer appears later than our active poll window, the observer
+  // still catches the mutation and injects — no manual page refresh required.
+  registerShortcut(adapter)
+  observeComposer(adapter)
+
+  let tooltipShown = false
+
+  // Actively poll for injection while the platform hydrates. Once the button is
+  // in place we stop polling; the observer above keeps it injected across SPA
+  // navigations and composer re-renders.
   function waitForInputAndInject(attempt: number): void {
-    const inputElement = adapter!.getInputElement()
+    const injected = injectTriggerButton(adapter!)
 
-    if (!inputElement && attempt < 20) {
-      console.info(
-        { attempt, platform },
-        '[PromptGod] Input not ready, retrying...'
-      )
-      setTimeout(() => waitForInputAndInject(attempt + 1), 500)
-      return
-    }
-
-    if (!inputElement) {
-      console.info({ platform }, '[PromptGod] Input element not found after retries')
-      if (attempt >= 20) {
-        showToast({
-          message: 'PromptGod may need an update — could not find the input field',
-          variant: 'warning',
-          duration: 8000,
-        })
+    if (injected) {
+      if (!tooltipShown) {
+        tooltipShown = true
+        showFirstRunTooltip()
       }
       return
     }
 
-    injectTriggerButton(adapter!)
-    observeComposer(adapter!)
-    registerShortcut(adapter!)
-    showFirstRunTooltip()
+    if (attempt < 60) {
+      if (attempt % 10 === 0) {
+        console.info({ attempt, platform }, '[PromptGod] Composer not ready, retrying...')
+      }
+      setTimeout(() => waitForInputAndInject(attempt + 1), 500)
+      return
+    }
+
+    // Active polling exhausted (~30s). The observer remains armed, so the button
+    // will still appear if the composer shows up later.
+    console.info(
+      { platform },
+      '[PromptGod] Composer not found after polling; observer still active'
+    )
+    showToast({
+      message: 'PromptGod is waiting for the page to finish loading…',
+      variant: 'info',
+      duration: 6000,
+    })
   }
 
-  setTimeout(() => waitForInputAndInject(1), 500)
+  setTimeout(() => waitForInputAndInject(1), 300)
 } else {
   console.info('[PromptGod] Content script loaded on unrecognized platform')
 }
