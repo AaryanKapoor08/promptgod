@@ -104,6 +104,44 @@ export function shouldUseProgressiveComposerRender(platform: string, model: unkn
   return false
 }
 
+// Reasoning-effort labels ChatGPT shows on the Plus/Pro composer mode pill.
+const CHATGPT_MODE_LABEL = /^(Auto|Instant|Thinking|Standard|Extended|Pro|Fast|Light|Legacy)\b/i
+
+/**
+ * Locate the ChatGPT reasoning-mode pill ("Extended", "Auto", "Thinking", ...).
+ *
+ * The pill only exists on Plus/Pro accounts. Returns null on free accounts (no
+ * pill), which the caller treats as the "not Plus" branch.
+ */
+function findChatGPTModePill(
+  form: HTMLElement | null | undefined,
+  sendButton: HTMLElement
+): HTMLElement | null {
+  const searchRoot = form ?? null
+  if (!searchRoot) {
+    return null
+  }
+
+  const candidates = Array.from(
+    searchRoot.querySelectorAll<HTMLElement>('button, [role="button"]')
+  )
+  for (const candidate of candidates) {
+    if (
+      candidate.id === 'promptgod-trigger' ||
+      candidate === sendButton ||
+      candidate.contains(sendButton) ||
+      sendButton.contains(candidate)
+    ) {
+      continue
+    }
+    const text = candidate.textContent?.trim() ?? ''
+    if (text.length > 0 && text.length < 24 && CHATGPT_MODE_LABEL.test(text)) {
+      return candidate
+    }
+  }
+  return null
+}
+
 export function injectTriggerButton(adapter: PlatformAdapter): boolean {
   // Don't double-inject
   if (injectedButton && document.body.contains(injectedButton)) {
@@ -265,44 +303,23 @@ export function injectTriggerButton(adapter: PlatformAdapter): boolean {
     button.classList.add('promptgod-trigger-btn--chatgpt')
     const input = adapter.getInputElement()
     const form = input?.closest('form')
-    const composer = form ?? input?.parentElement?.parentElement?.parentElement ?? null
 
-    // Sit to the LEFT of the mode/effort selector pill (e.g. "Extended", "Auto",
-    // "Thinking") instead of floating on top of it. Detect the pill by its visible
-    // text label, with a fallback to any short text-bearing button that isn't the
-    // send button (mic/voice/"+" buttons are icon-only and carry no text).
-    const MODE_LABEL = /^(Auto|Instant|Thinking|Standard|Extended|Pro|Fast|Light|Legacy)\b/i
-    const candidates = Array.from(
-      composer?.querySelectorAll<HTMLElement>('button, [role="button"]') ?? []
-    ).filter((btn) => {
-      if (btn === sendButton || btn.contains(sendButton) || sendButton.contains(btn)) return false
-      const text = btn.textContent?.trim() ?? ''
-      return text.length > 0 && text.length < 24
-    })
-    const modeButton =
-      candidates.find((btn) => MODE_LABEL.test(btn.textContent?.trim() ?? '')) ?? candidates[0]
+    // ChatGPT Plus/Pro accounts render a reasoning-effort mode pill ("Extended",
+    // "Auto", "Thinking", ...) at the right edge of the composer — exactly the
+    // space a free account leaves empty. Free accounts never render this pill, so
+    // its presence is our DOM-only "is this account Plus?" signal.
+    //
+    //  - Plus/Pro: seat our button immediately to the LEFT of the pill so the two
+    //    never overlap.
+    //  - Free: no pill, so float the button in the (empty) bottom-right corner.
+    const modePill = findChatGPTModePill(form, sendButton)
 
-    if (composer && modeButton) {
+    if (modePill?.parentElement) {
+      // Plus/Pro account: insert directly before the pill (to its left).
       button.classList.add('promptgod-trigger-btn--chatgpt-inline')
-      let container = modeButton.parentElement
-      while (container && container !== composer && !container.contains(sendButton)) {
-        container = container.parentElement
-      }
-      if (container) {
-        let directChild: HTMLElement | null = modeButton
-        while (directChild && directChild.parentElement !== container) {
-          directChild = directChild.parentElement
-        }
-        if (directChild) {
-          container.insertBefore(button, directChild)
-        } else {
-          sendButton.parentElement?.insertBefore(button, sendButton)
-        }
-      } else {
-        sendButton.parentElement?.insertBefore(button, sendButton)
-      }
+      modePill.parentElement.insertBefore(button, modePill)
     } else if (form) {
-      // Fallback: absolute-position the button inside the form, anchored bottom-right.
+      // Free account (no mode pill): absolute-position bottom-right of the form.
       button.classList.add('promptgod-trigger-btn--chatgpt-floating')
       const formPosition = getComputedStyle(form).position
       if (formPosition === 'static') {
