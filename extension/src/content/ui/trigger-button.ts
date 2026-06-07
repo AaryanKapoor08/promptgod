@@ -188,8 +188,13 @@ export function injectTriggerButton(adapter: PlatformAdapter): boolean {
     }
   })
 
-  // Platform-specific insertion
+  // Platform-specific insertion. Wrapped because insertBefore throws a
+  // NotFoundError when the platform (notably Gemini's Angular composer)
+  // re-parents the toolbar between us computing the anchor and inserting —
+  // an unhandled throw here used to abort the bootstrap retry chain, which is
+  // what left Gemini needing a manual refresh.
   const platform = adapter.getPlatform()
+  try {
   if (platform === 'claude') {
     button.classList.add('promptgod-trigger-btn--claude')
     const input = adapter.getInputElement()
@@ -335,6 +340,23 @@ export function injectTriggerButton(adapter: PlatformAdapter): boolean {
     }
   } else {
     sendButton.parentElement?.insertBefore(button, sendButton)
+  }
+  } catch (error) {
+    console.warn({ cause: error, platform }, '[PromptGod] Anchored insertion failed, using fallback')
+    if (!button.isConnected) {
+      try {
+        sendButton.parentElement?.insertBefore(button, sendButton)
+      } catch {
+        // Verified below — leaving the button unconnected makes us return false.
+      }
+    }
+  }
+
+  // A DOM race can leave the button uninserted (the anchor was re-parented mid
+  // insertion). Don't claim success unless it actually landed: returning false
+  // keeps the bootstrap poll and the MutationObserver retrying until it sticks.
+  if (!button.isConnected) {
+    return false
   }
 
   injectedButton = button
@@ -1099,14 +1121,25 @@ export function showFirstRunTooltip(): void {
 export function observeComposer(adapter: PlatformAdapter): void {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
+  const tryInject = (): void => {
+    if (injectedButton && document.body.contains(injectedButton)) {
+      return
+    }
+    injectedButton = null
+    try {
+      injectTriggerButton(adapter)
+    } catch (error) {
+      // Never let a transient DOM race tear down the observer — the next
+      // mutation or navigation event will retry.
+      console.warn({ cause: error }, '[PromptGod] Re-injection attempt threw, will retry')
+    }
+  }
+
   const observer = new MutationObserver(() => {
     if (debounceTimer) return
     debounceTimer = setTimeout(() => {
       debounceTimer = null
-      if (!injectedButton || !document.body.contains(injectedButton)) {
-        injectedButton = null
-        injectTriggerButton(adapter)
-      }
+      tryInject()
     }, 200)
   })
 
@@ -1114,6 +1147,36 @@ export function observeComposer(adapter: PlatformAdapter): void {
     childList: true,
     subtree: true,
   })
+
+  // SPA route changes (e.g. Gemini's gemini.google.com → /app hand-off) swap the
+  // whole composer without a document reload. The MutationObserver usually sees
+  // this, but hooking navigation directly guarantees a prompt re-inject pass so
+  // the button shows up on first load instead of after a manual refresh.
+  const onNavigate = (): void => {
+    // Burst a few attempts: the composer for the new route hydrates a beat
+    // after the URL changes.
+    let pass = 0
+    const tick = (): void => {
+      tryInject()
+      if (++pass < 10 && (!injectedButton || !document.body.contains(injectedButton))) {
+        setTimeout(tick, 300)
+      }
+    }
+    tick()
+  }
+
+  const wrapHistory = (method: 'pushState' | 'replaceState'): void => {
+    const original = history[method]
+    history[method] = function (this: History, ...args: Parameters<History['pushState']>) {
+      const result = original.apply(this, args)
+      window.dispatchEvent(new Event('promptgod:navigation'))
+      return result
+    }
+  }
+  wrapHistory('pushState')
+  wrapHistory('replaceState')
+  window.addEventListener('promptgod:navigation', onNavigate)
+  window.addEventListener('popstate', onNavigate)
 }
 
 // Keyboard shortcut: Ctrl+Shift+G

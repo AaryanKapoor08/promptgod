@@ -35,7 +35,14 @@ if (adapter) {
   // in place we stop polling; the observer above keeps it injected across SPA
   // navigations and composer re-renders.
   function waitForInputAndInject(attempt: number): void {
-    const injected = injectTriggerButton(adapter!)
+    let injected = false
+    try {
+      injected = injectTriggerButton(adapter!)
+    } catch (error) {
+      // A transient DOM race (anchor re-parented mid-insert) must not abort the
+      // retry chain — that was a cause of Gemini needing a manual refresh.
+      console.warn({ cause: error, attempt, platform }, '[PromptGod] Injection attempt threw, retrying')
+    }
 
     if (injected) {
       if (!tooltipShown) {
@@ -66,7 +73,9 @@ if (adapter) {
     })
   }
 
-  setTimeout(() => waitForInputAndInject(1), 300)
+  // Kick off almost immediately — on a warm load the composer is already there,
+  // so there's no reason to sit idle for 300ms before the first attempt.
+  setTimeout(() => waitForInputAndInject(1), 50)
 } else {
   console.info('[PromptGod] Content script loaded on unrecognized platform')
 }
