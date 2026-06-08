@@ -1067,16 +1067,10 @@ function setLoading(loading: boolean): void {
 }
 
 function showEnhancingStatus(): void {
+  // Intentionally a no-op: the spinner state on the trigger button itself
+  // (promptgod-trigger-btn--loading) is the only loading indicator we show.
+  // The previous "Running LLM branch..." text label was removed by request.
   removeEnhancingStatus()
-  const el = document.createElement('span')
-  el.className = 'promptgod-enhancing-status'
-  el.textContent = 'Running LLM branch...'
-  const btn = injectedButton
-  if (btn?.parentElement) {
-    btn.parentElement.style.position = btn.parentElement.style.position || 'relative'
-    btn.parentElement.appendChild(el)
-    enhancingStatusEl = el
-  }
 }
 
 function removeEnhancingStatus(): void {
