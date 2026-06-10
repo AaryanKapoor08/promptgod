@@ -6,7 +6,6 @@ import { ClaudeAdapter } from './adapters/claude'
 import { GeminiAdapter } from './adapters/gemini'
 import { PerplexityAdapter } from './adapters/perplexity'
 import { injectTriggerButton, observeComposer, registerShortcut, showFirstRunTooltip } from './ui/trigger-button'
-import { showToast } from './ui/toast'
 
 const adapters: PlatformAdapter[] = [
   new ChatGPTAdapter(),
@@ -60,17 +59,14 @@ if (adapter) {
       return
     }
 
-    // Active polling exhausted (~30s). The observer remains armed, so the button
-    // will still appear if the composer shows up later.
+    // Active polling exhausted (~30s). This is expected on pages without a
+    // composer (settings, pricing, etc.) — there's nothing to inject into, so
+    // we stay silent rather than nagging the user. The observer remains armed,
+    // so the button still appears if a composer shows up later (SPA nav).
     console.info(
       { platform },
       '[PromptGod] Composer not found after polling; observer still active'
     )
-    showToast({
-      message: 'PromptGod is waiting for the page to finish loading…',
-      variant: 'info',
-      duration: 6000,
-    })
   }
 
   // Kick off almost immediately — on a warm load the composer is already there,
